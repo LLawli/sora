@@ -175,9 +175,11 @@ mkdir -p "$CACHE_DIR/index.d"
 tmp="$CACHE_DIR/index.d/.$BOX.tmp"
 
 # Enumerate executables from the standard system dirs. A plain glob loop is
-# POSIX and fork-free, and works even on busybox-based boxes.
+# POSIX and fork-free, and works even on busybox-based boxes. /usr/games is
+# real: Debian/Ubuntu install sl, cowsay, fortune & friends there.
 {
-    for d in /usr/local/bin /usr/local/sbin /usr/bin /usr/sbin /bin /sbin /opt/bin; do
+    for d in /usr/local/bin /usr/local/sbin /usr/bin /usr/sbin /bin /sbin \
+             /usr/games /usr/local/games /opt/bin; do
         [ -d "$d" ] || continue
         for f in "$d"/*; do
             [ -x "$f" ] && [ ! -d "$f" ] && printf '%s\n' "${f##*/}"

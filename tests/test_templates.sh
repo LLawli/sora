@@ -53,6 +53,10 @@ reindex="$SANDBOX/reindex"
 "$SORA_BIN" _template reindex > "$reindex"
 sh -n "$reindex" || fail "reindex: generated script fails sh -n"
 content=$(cat "$reindex")
+# Debian/Ubuntu install sl, cowsay, fortune & friends in /usr/games — a
+# reindex that skips it leaves a real blind spot in apt boxes.
+assert_contains "$content" "/usr/games" "reindex: scans /usr/games"
+assert_contains "$content" "/usr/local/games" "reindex: scans /usr/local/games"
 assert_contains "$content" "CACHE_DIR='$XDG_CACHE_HOME/sora'" "reindex: absolute cache path embedded"
 assert_contains "$content" "CONFIG_DIR='$XDG_CONFIG_HOME/sora'" "reindex: absolute config path embedded"
 assert_contains "$content" "MERGE='$XDG_DATA_HOME/sora/libexec/sora-merge-index'" \

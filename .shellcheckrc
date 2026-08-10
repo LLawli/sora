@@ -1,0 +1,9 @@
+# Project-wide shellcheck policy (CI enforces a clean run).
+#
+# SC2015 (A && B || C): used deliberately as "try, else fallback"; every such
+#   site has been reviewed for the B-fails case.
+# SC1091 (not following sourced file): tests source helpers.sh via a runtime
+#   path; the file is linted on its own.
+# SC2016 (expressions don't expand in single quotes): intentional literals —
+#   tests assert that generated scripts contain UNexpanded variables.
+disable=SC2015,SC1091,SC2016

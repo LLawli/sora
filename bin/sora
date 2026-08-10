@@ -584,8 +584,14 @@ EOF
 
     count=$(wc -l < "$LISTS_DIR/$name.list" 2>/dev/null || echo 0)
     info "box '$name' is ready: $count commands indexed"
-    if ! grep -qs 'sora: resolve distrobox commands' "${ZDOTDIR:-$HOME}/.zshrc" "$HOME/.bashrc" 2>/dev/null &&
-       [ ! -f "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/zz-sora.fish" ]; then
+    local hooked=0 sh
+    for sh in bash zsh fish; do
+        if hook_system_file "$sh" >/dev/null || hook_installed "$sh"; then
+            hooked=1
+            break
+        fi
+    done
+    if [ "$hooked" = 0 ]; then
         info "next step: 'sora hook install' to enable late resolution in your shell"
     fi
 }
@@ -919,6 +925,27 @@ hook_rc_target() { # bash|zsh|fish
     esac
 }
 
+# System-wide hook installs are the NORMAL case on a distro that packages
+# sora (e.g. an OS image dropping /etc/profile.d/zz-sora.sh for every user).
+# Detection must see them, or every user of such a distro gets told to
+# 'sora hook install' a hook that is already active — adding a redundant rc
+# line — while doctor cries wolf about a missing hook.
+# SORA_SYSROOT exists for the test suite; it is empty in real use.
+hook_system_file() { # bash|zsh|fish -> prints the system file, if any
+    local root="${SORA_SYSROOT:-}" f
+    local candidates=()
+    case $1 in
+        bash) candidates=("$root"/etc/profile.d/*sora*.sh) ;;
+        zsh)  candidates=("$root"/etc/profile.d/*sora*.zsh "$root"/etc/zshrc.d/*sora*) ;;
+        fish) candidates=("$root"/usr/share/fish/vendor_conf.d/*sora*.fish
+                          "$root"/etc/fish/conf.d/*sora*.fish) ;;
+    esac
+    for f in "${candidates[@]}"; do
+        [ -f "$f" ] && { printf '%s\n' "$f"; return 0; }
+    done
+    return 1
+}
+
 hook_installed() { # bash|zsh|fish
     # Detection greps for the marker COMMENT, never for the hook's path: the
     # path only contains "sora" when the checkout/prefix happens to be named
@@ -933,7 +960,11 @@ hook_installed() { # bash|zsh|fish
 }
 
 hook_install_one() { # bash|zsh|fish
-    local shell=$1 rc file tmp
+    local shell=$1 rc file tmp sysf
+    if sysf=$(hook_system_file "$shell"); then
+        info "$shell: system-wide hook already active ($sysf); nothing to install"
+        return 0
+    fi
     rc=$(hook_rc_target "$shell")
     file=$(hook_file "$shell")
     if [ "$shell" = fish ]; then
@@ -992,8 +1023,11 @@ cmd_hook() {
             done
             ;;
         status)
+            local sysf
             for shell in bash zsh fish; do
-                if hook_installed "$shell"; then
+                if sysf=$(hook_system_file "$shell"); then
+                    printf '%-5s installed  (system-wide: %s)\n' "$shell" "$sysf"
+                elif hook_installed "$shell"; then
                     printf '%-5s installed  (%s)\n' "$shell" "$(hook_rc_target "$shell")"
                 else
                     printf '%-5s not installed\n' "$shell"
@@ -1044,9 +1078,13 @@ cmd_doctor() {
         done
     fi
 
-    local rc hookpath
+    local rc hookpath sysf
     for shell in bash zsh fish; do
         command -v "$shell" >/dev/null 2>&1 || continue
+        if sysf=$(hook_system_file "$shell"); then
+            ok "$shell hook active system-wide ($sysf)"
+            continue
+        fi
         if ! hook_installed "$shell"; then
             bad "$shell hook not installed (run 'sora hook install $shell')"
             continue

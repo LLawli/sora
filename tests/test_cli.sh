@@ -116,4 +116,34 @@ assert_contains "$out" "dangling symlink $DANGLE/python" \
 out=$("$SORA_BIN" sync 2>&1 || true)
 assert_not_contains "$out" "unknown command" "sora sync is accepted as an alias"
 
+# --- system-wide hook installs (distro packaging) ---------------------------
+# A distro that packages sora wires the hook for every user (e.g. Kuuhaku's
+# /etc/profile.d/zz-sora.sh). status/install/doctor must recognize that, or
+# every user of the distro is told to install a hook that is already active.
+SYSROOT="$SANDBOX/sysroot"
+mkdir -p "$SYSROOT/etc/profile.d"
+printf '[ -r /usr/share/sora/shell/hook.bash ] && . /usr/share/sora/shell/hook.bash\n' \
+    > "$SYSROOT/etc/profile.d/zz-sora.sh"
+rm -f "$HOME/.bashrc"; touch "$HOME/.bashrc"
+
+out=$(SORA_SYSROOT="$SYSROOT" "$SORA_BIN" hook status)
+assert_contains "$out" "bash  installed  (system-wide: $SYSROOT/etc/profile.d/zz-sora.sh)" \
+    "hook status sees /etc/profile.d installs"
+
+out=$(SORA_SYSROOT="$SYSROOT" "$SORA_BIN" hook install bash)
+assert_contains "$out" "nothing to install" "hook install skips a system-wide hook"
+assert_eq "$(grep -c 'sora' "$HOME/.bashrc")" 0 "no redundant line is appended to .bashrc"
+
+out=$(SORA_SYSROOT="$SYSROOT" "$SORA_BIN" doctor 2>&1 || true)
+assert_contains "$out" "bash hook active system-wide" "doctor accepts a system-wide hook"
+assert_not_contains "$out" "bash hook not installed" "doctor no longer flags system installs"
+
+# fish's packaging-correct location is the vendor conf.d.
+mkdir -p "$SYSROOT/usr/share/fish/vendor_conf.d"
+printf 'source /usr/share/sora/shell/hook.fish\n' \
+    > "$SYSROOT/usr/share/fish/vendor_conf.d/sora.fish"
+rm -f "$XDG_CONFIG_HOME/fish/conf.d/zz-sora.fish"
+out=$(SORA_SYSROOT="$SYSROOT" "$SORA_BIN" hook status)
+assert_contains "$out" "fish  installed  (system-wide:" "hook status sees fish vendor_conf.d installs"
+
 echo "ok: cli"

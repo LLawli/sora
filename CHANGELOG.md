@@ -9,6 +9,15 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ## [Unreleased]
 
+### Fixed
+
+- `sora hook status`, `hook install`, `doctor` and the `box create` hint now
+  recognize system-wide hook installs — `/etc/profile.d/*sora*` and fish's
+  `vendor_conf.d` — which are the normal case on distros that package sora
+  (e.g. Kuuhaku). Previously every user of such a distro was told to install
+  a hook that was already active, and `hook install` would append a
+  redundant rc line.
+
 ## [0.1.2] - 2026-08-10
 
 ### Fixed

@@ -25,25 +25,25 @@ No daemon, no PATH pollution, and a typo never wakes a container.
 ## Installation
 
 ```sh
-# COPR (Fedora family — the primary channel)
-sudo dnf copr enable <owner>/sora && sudo dnf install sora
+# Recommended: verified installer (checks the release sha256, installs to ~/.local)
+curl -fsSL https://raw.githubusercontent.com/LLawli/sora/main/packaging/install.sh | sh
 
-# AUR (Arch Linux)
-paru -S sora
-
-# Tarball from the latest release
-curl -fsSL https://github.com/REPLACE_ME/sora/releases/latest/download/sora-0.1.0.tar.gz | tar xz
+# Tarball, by hand (fallback)
+curl -fsSL https://github.com/LLawli/sora/releases/latest/download/sora-0.1.0.tar.gz | tar xz
 make -C sora-0.1.0 install PREFIX=~/.local
 
-# curl | sh (fallback; installs to ~/.local)
-curl -fsSL https://REPLACE_ME/install.sh | sh
+# mise
+mise use -g github:LLawli/sora
 
-# From a checkout
-make install PREFIX=~/.local
+# Homebrew (Linux or macOS host managing remote boxes)
+brew install LLawli/tap/sora
 ```
 
 Requirements: `distrobox` and `podman` (or docker). Pure shell — nothing to
-compile, no runtime. Then, once:
+compile, no runtime, `noarch` everywhere. There are deliberately **no native
+distro packages** (COPR/AUR/deb/rpm): for a single shell script they add
+review queues and maintenance for zero benefit — see
+[docs/decisions.md](docs/decisions.md). Then, once:
 
 ```console
 $ sora hook install        # bash, zsh and fish

@@ -34,7 +34,9 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 - `sora hook install|status|print`, `sora doctor`, `sora images`.
 - Test suite (sandboxed, stubbed distrobox/podman) plus an opt-in
   integration test against a real container.
-- Packaging: COPR spec, AUR PKGBUILD, `curl | sh` fallback installer.
+- Install surface: verified `curl | sh` installer (primary), release
+  tarball, mise github backend, Homebrew formula in `LLawli/homebrew-tap`
+  (auto-bumped by the release pipeline).
 
-[Unreleased]: https://github.com/REPLACE_ME/sora/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/REPLACE_ME/sora/releases/tag/v0.1.0
+[Unreleased]: https://github.com/LLawli/sora/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/LLawli/sora/releases/tag/v0.1.0

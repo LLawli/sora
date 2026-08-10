@@ -34,10 +34,25 @@ problem sora solves. Scope creep refused.
 
 ## Name: sora
 
-Checked 2026-08: free on AUR (the registry that matters for a shell tool,
-alongside COPR which is namespaced per owner); taken on crates.io and PyPI
-by unrelated projects — irrelevant unless the implementation language
-changes. Fallback if a registry collision ever forces it: `sora-box`.
+Checked 2026-08: taken on crates.io and PyPI by unrelated projects —
+irrelevant unless the implementation language changes; free on AUR at the
+time of checking (moot: see the packaging decision below). Fallback if a
+registry collision ever forces it: `sora-box`.
+
+## Distribution: release tarball first, no native distro packages
+
+The install surface is `curl | sh` (verified installer) as the primary
+path, the tarball as fallback, mise's github backend, and the
+`LLawli/homebrew-tap` Homebrew formula. All four consume the same release
+tarball — "build once, repackage many" collapses to "publish one tarball"
+for a noarch shell project.
+
+COPR and AUR were built and then **removed on purpose**: for a single shell
+script they are overkill — a spec/PKGBUILD to maintain, an external review
+and build queue, and (at the time of the decision, 2026-08) AUR was closed
+to new submissions anyway. Every target user is covered by the four paths
+above at zero registry cost. Revisit only if real demand shows up in
+issues.
 
 ## License: MIT
 

@@ -25,25 +25,25 @@ Sem daemon, sem poluir o PATH, e um typo nunca acorda um container.
 ## Instalação
 
 ```sh
-# COPR (família Fedora — canal principal)
-sudo dnf copr enable <owner>/sora && sudo dnf install sora
+# Recomendado: installer verificado (checa o sha256 da release, instala em ~/.local)
+curl -fsSL https://raw.githubusercontent.com/LLawli/sora/main/packaging/install.sh | sh
 
-# AUR (Arch Linux)
-paru -S sora
-
-# Tarball da última release
-curl -fsSL https://github.com/REPLACE_ME/sora/releases/latest/download/sora-0.1.0.tar.gz | tar xz
+# Tarball, na mão (fallback)
+curl -fsSL https://github.com/LLawli/sora/releases/latest/download/sora-0.1.0.tar.gz | tar xz
 make -C sora-0.1.0 install PREFIX=~/.local
 
-# curl | sh (fallback; instala em ~/.local)
-curl -fsSL https://REPLACE_ME/install.sh | sh
+# mise
+mise use -g github:LLawli/sora
 
-# De um checkout
-make install PREFIX=~/.local
+# Homebrew (host Linux ou macOS gerenciando boxes remotas)
+brew install LLawli/tap/sora
 ```
 
 Requisitos: `distrobox` e `podman` (ou docker). Shell puro — nada para
-compilar, nenhum runtime. Depois, uma vez:
+compilar, nenhum runtime, `noarch` em qualquer lugar. Deliberadamente **não
+há pacotes nativos de distro** (COPR/AUR/deb/rpm): para um único shell
+script eles adicionam filas de revisão e manutenção sem benefício — veja
+[docs/decisions.md](docs/decisions.md). Depois, uma vez:
 
 ```console
 $ sora hook install        # bash, zsh e fish

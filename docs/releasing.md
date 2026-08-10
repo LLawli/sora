@@ -33,24 +33,23 @@ Pure shell means there is no per-arch build matrix: the release tarball is
 
 | Path | How it consumes the tarball |
 |---|---|
+| `curl \| sh` (primary) | `packaging/install.sh` resolves the latest release, downloads the tarball, verifies its `.sha256`, installs to `~/.local` |
 | Direct download | `curl … tar.gz \| tar xz && make install` |
-| AUR | `source=()` pointing at the tag tarball, sha256 pinned |
-| COPR | `Source0` pointing at the tag tarball; COPR webhook builds on tag |
-| `curl \| sh` | clones the tag (fallback path, documented as such) |
+| mise | `mise use -g github:LLawli/sora` — the github backend picks the only `.tar.gz` asset and finds `sora-X.Y.Z/bin` on its own; the CLI runs straight from the extracted tree (checkout layout) |
+| Homebrew | `LLawli/homebrew-tap` formula pins the tarball URL + sha256; the `bump-tap` job in `release.yml` rewrites it on every release |
 
-## Registry setup (one-time, still pending)
+There are deliberately no native distro packages (COPR/AUR/deb/rpm) — see
+[decisions.md](decisions.md).
 
-- **COPR**: create the project, add the GitHub webhook, point it at
-  `packaging/sora.spec`. Replace `REPLACE_ME` URLs in the spec.
-- **AUR**: claim the `sora` package name (free as of 2026-08), then enable
-  the commented AUR job in `release.yml`
-  (`KSXGitHub/github-actions-deploy-aur`, sha256 injected from the release
-  artifact — same pattern as the checksum step).
-- Replace the remaining `REPLACE_ME` placeholders (spec `URL:`, PKGBUILD
-  `url=`, installer repo URL, CHANGELOG links) once the forge URL exists.
+## Automation setup (one-time)
 
-## Version lives in three places
+- **Tap bumping**: create a fine-grained PAT with push access to
+  `LLawli/homebrew-tap` and add it to this repo as the `TAP_GITHUB_TOKEN`
+  secret. Without it, the `bump-tap` job skips politely and the formula can
+  be bumped by hand (commit style in the tap: `sora vX.Y.Z`).
 
-`bin/sora` (`SORA_VERSION`), `packaging/sora.spec`, `packaging/PKGBUILD`.
-`bin/release` bumps all three; the pipeline's tag-vs-code check catches a
-manual bump that missed one.
+## Version lives in one place
+
+`bin/sora` (`SORA_VERSION`). `bin/release` bumps it; the pipeline's
+tag-vs-code check catches a manual tag that missed the bump. The tap formula
+carries its own version but is machine-written by `bump-tap`.

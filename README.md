@@ -22,6 +22,13 @@ $ pacman -S steam     # works from scripts, .desktop files, cron, anywhere
 
 No daemon, no PATH pollution, and a typo never wakes a container.
 
+![sora demo](docs/demo.gif)
+
+*Above: `neofetch` resolves on the host (host always wins); `type screenfetch`
+knows nothing — but running it dispatches into the ubuntu box transparently;
+the typo `screenfetc` fails instantly without waking any container; and
+`sora which screenfetch` shows how a command would resolve.*
+
 ## Installation
 
 ```sh

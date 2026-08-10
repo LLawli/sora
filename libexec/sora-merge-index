@@ -1,0 +1,76 @@
+#!/bin/sh
+# sora-merge-index — merge per-box command lists into the resolved index.
+#
+# Usage: sora-merge-index CONFIG_DIR CACHE_DIR
+#
+# Reads:
+#   CACHE_DIR/index.d/<box>.list   one command name per line, written by the
+#                                  in-box reindex script
+#   CONFIG_DIR/boxes/<box>.toml    box metadata (only `priority` is used here)
+#   CONFIG_DIR/pins                TSV: command<TAB>box, manual overrides
+#
+# Writes (atomically):
+#   CACHE_DIR/index                TSV: command<TAB>box, one winner per command
+#
+# Tie-break rules, in order:
+#   1. a pin wins, but only if the pinned box actually provides the command
+#      (dangling pins are silently ignored so they never break resolution)
+#   2. highest `priority` wins
+#   3. alphabetical box name (deterministic, documented)
+#
+# This script is pure POSIX sh + awk + sort on purpose: it also runs INSIDE
+# boxes (triggered by package-manager hooks), where nothing else is
+# guaranteed to exist. It must never touch a container.
+
+set -eu
+
+CONFIG_DIR="${1:?usage: sora-merge-index CONFIG_DIR CACHE_DIR}"
+CACHE_DIR="${2:?usage: sora-merge-index CONFIG_DIR CACHE_DIR}"
+
+LISTS_DIR="$CACHE_DIR/index.d"
+INDEX="$CACHE_DIR/index"
+PINS="$CONFIG_DIR/pins"
+TAB=$(printf '\t')
+
+mkdir -p "$CACHE_DIR"
+
+if [ ! -d "$LISTS_DIR" ]; then
+    : > "$INDEX"
+    exit 0
+fi
+
+tmp="$CACHE_DIR/.index.tmp"
+
+{
+    for f in "$LISTS_DIR"/*.list; do
+        [ -f "$f" ] || continue
+        box=${f##*/}
+        box=${box%.list}
+        prio=0
+        meta="$CONFIG_DIR/boxes/$box.toml"
+        if [ -f "$meta" ]; then
+            prio=$(awk -F'=' '
+                { key = $1; gsub(/[ \t]/, "", key) }
+                key == "priority" { v = $2; gsub(/[ \t"]/, "", v); print v; exit }
+            ' "$meta")
+            [ -n "$prio" ] || prio=0
+        fi
+        # NF==1 guards against odd entries (names with spaces cannot be
+        # dispatched by the shell hook anyway).
+        awk -v b="$box" -v p="$prio" -v OFS='\t' 'NF == 1 { print $1, p, b }' "$f"
+    done
+} | awk -F'\t' -v OFS='\t' -v pins="$PINS" '
+    BEGIN {
+        while ((getline line < pins) > 0) {
+            n = split(line, a, "\t")
+            if (n >= 2) pin[a[1]] = a[2]
+        }
+    }
+    # A pin is only honored when the pinned box really has the command:
+    # boosting (instead of forcing) makes dangling pins harmless.
+    { if (($1 in pin) && pin[$1] == $3) $2 = 1000000000; print }
+' | sort -t "$TAB" -k1,1 -k2,2nr -k3,3 | awk -F'\t' -v OFS='\t' '
+    !seen[$1]++ { print $1, $3 }
+' > "$tmp"
+
+mv -f "$tmp" "$INDEX"

@@ -9,6 +9,8 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-10
+
 ### Fixed
 
 - Homebrew installs no longer embed the versioned Cellar keg path: share-dir

@@ -9,6 +9,8 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-10
+
 ### Fixed
 
 - `sora hook status`, `hook install`, `doctor` and the `box create` hint now

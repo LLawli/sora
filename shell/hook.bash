@@ -8,6 +8,13 @@
 # The lookup below never touches a container: it is a single awk pass over a
 # flat TSV file. A typo costs microseconds, not a container wake-up.
 
+# Defend late resolution against bash's command hash: a binary removed after
+# being hashed (e.g. 'brew uninstall neovim') otherwise fails forever with
+# "No such file or directory" at the OLD path — PATH search never re-runs,
+# so the command-not-found hook never gets a chance. With checkhash, bash
+# re-verifies hashed paths and falls back to a fresh PATH search.
+shopt -s checkhash 2>/dev/null || true
+
 # Capture a pre-existing handler exactly once — and never capture ourselves
 # (re-sourcing this file must not create an infinite delegation loop).
 if declare -f command_not_found_handle >/dev/null 2>&1; then

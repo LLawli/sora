@@ -65,6 +65,26 @@ else
     echo "note: fish not installed; skipping fish dispatch"
 fi
 
+# --- bash hash staleness ----------------------------------------------------
+# A command that was hashed and then removed (e.g. 'brew uninstall neovim')
+# must fall through to the hook instead of dying forever at the old path —
+# hook.bash sets 'shopt -s checkhash' exactly for this.
+cat > "$SANDBOX/inner_hash.sh" <<'EOF'
+source "$HOOK_FILE"
+mkdir -p "$HASH_BIN"
+printf '#!/bin/sh\necho REAL\n' > "$HASH_BIN/ghostcmd"
+chmod +x "$HASH_BIN/ghostcmd"
+PATH="$HASH_BIN:$PATH"
+ghostcmd                     # found on PATH, gets hashed
+rm -f "$HASH_BIN/ghostcmd"
+ghostcmd                     # hashed & gone -> checkhash -> hook -> stub
+echo "rc=$?"
+EOF
+out=$(HOOK_FILE="$HOOK_BASH" HASH_BIN="$SANDBOX/hashbin" bash --norc "$SANDBOX/inner_hash.sh" 2>&1)
+assert_contains "$out" "REAL" "hash test: the real binary ran while it existed"
+assert_contains "$out" "rc=42" "stale hashed command falls through to the hook"
+rm -f "$SORA_TEST_RECORD"
+
 # --- stale index safety -----------------------------------------------------
 # If the container is gone, the hook must NEVER reach distrobox (a stale
 # index would otherwise trigger distrobox's scary "create it?" prompt).

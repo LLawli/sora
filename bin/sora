@@ -1,0 +1,1123 @@
+#!/usr/bin/env bash
+# sora — run distrobox container commands as if they were native host commands.
+#
+# Two complementary strategies:
+#   * late resolution: a shell command-not-found hook consults a cached
+#     command->box index and dispatches into the box. Host precedence is
+#     structural: the hook only ever fires after PATH lookup already failed.
+#   * anxious export: a real wrapper in PATH for one specific command
+#     (delegated to distrobox-export), for scripts/.desktop/cron contexts
+#     the late hook cannot reach.
+#
+# See README.md for the full design rationale.
+
+set -u
+
+SORA_VERSION="0.1.0"
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+SORA_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/sora"
+SORA_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/sora"
+SORA_DATA="${XDG_DATA_HOME:-$HOME/.local/share}/sora"
+
+BOXES_DIR="$SORA_CONFIG/boxes"
+LISTS_DIR="$SORA_CACHE/index.d"
+INDEX="$SORA_CACHE/index"
+PINS="$SORA_CONFIG/pins"
+ANXIOUS_REG="$SORA_CONFIG/anxious.list"
+EXPORT_PATH="$HOME/.local/bin"
+HOMES_DIR="$SORA_DATA/homes"
+
+SORA_USER_NAME=$(id -un)
+TAB=$(printf '\t')
+
+# Where the shipped shell hooks and merge script live. Two layouts:
+#   installed:    PREFIX/bin/sora + PREFIX/share/sora/{shell,libexec}
+#   dev checkout: repo/bin/sora   + repo/{shell,libexec}
+resolve_share() {
+    local self root
+    self=$(readlink -f "${BASH_SOURCE[0]:-$0}")
+    root=$(dirname "$(dirname "$self")")
+    if [ -d "$root/share/sora/shell" ]; then
+        printf '%s\n' "$root/share/sora"
+    elif [ -d "$root/shell" ]; then
+        printf '%s\n' "$root"
+    else
+        printf 'sora: error: cannot locate the sora share directory near %s\n' "$self" >&2
+        exit 1
+    fi
+}
+SORA_SHARE=$(resolve_share)
+
+# ---------------------------------------------------------------------------
+# UI helpers
+# ---------------------------------------------------------------------------
+
+info() { printf 'sora: %s\n' "$*"; }
+warn() { printf 'sora: warning: %s\n' "$*" >&2; }
+die()  { printf 'sora: error: %s\n' "$*" >&2; exit 1; }
+
+confirm() {
+    local reply
+    printf 'sora: %s [y/N] ' "$1"
+    read -r reply
+    case $reply in
+        y|Y|yes|YES) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+need_cmd() {
+    command -v "$1" >/dev/null 2>&1 || die "'$1' is required but was not found in PATH"
+}
+
+container_manager() {
+    if command -v podman >/dev/null 2>&1; then
+        printf 'podman\n'
+    elif command -v docker >/dev/null 2>&1; then
+        printf 'docker\n'
+    else
+        die "neither podman nor docker found; sora needs a container manager"
+    fi
+}
+
+container_exists() {
+    if command -v podman >/dev/null 2>&1; then
+        podman container exists "$1" 2>/dev/null && return 0
+    fi
+    if command -v docker >/dev/null 2>&1; then
+        docker container inspect "$1" >/dev/null 2>&1 && return 0
+    fi
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Tiny flat-TOML helpers (only `key = value` lines; good enough on purpose:
+# the same file must also be parseable by awk from the POSIX merge script)
+# ---------------------------------------------------------------------------
+
+toml_get() { # file key
+    awk -F'=' -v k="$2" '
+        /^[ \t]*#/ { next }
+        { key = $1; gsub(/[ \t]/, "", key) }
+        key == k {
+            v = $2
+            sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v)
+            gsub(/"/, "", v)
+            print v
+            exit
+        }
+    ' "$1"
+}
+
+toml_set() { # file key value [raw]
+    local f=$1 k=$2 v=$3 raw=${4:-} tmp
+    tmp=$(mktemp)
+    awk -v k="$k" -v v="$v" -v raw="$raw" -F'=' '
+        BEGIN { done = 0 }
+        {
+            key = $1; gsub(/[ \t]/, "", key)
+            if (key == k) {
+                if (raw != "") print k " = " v
+                else           print k " = \"" v "\""
+                done = 1
+                next
+            }
+            print
+        }
+        END {
+            if (!done) {
+                if (raw != "") print k " = " v
+                else           print k " = \"" v "\""
+            }
+        }
+    ' "$f" > "$tmp" && mv "$tmp" "$f"
+}
+
+box_meta() { printf '%s\n' "$BOXES_DIR/$1.toml"; }
+box_configured() { [ -f "$(box_meta "$1")" ]; }
+
+require_box() {
+    box_configured "$1" || die "box '$1' is not managed by sora (no $(box_meta "$1"))"
+}
+
+# ---------------------------------------------------------------------------
+# Generated-file templates
+#
+# Everything below is generated with ABSOLUTE paths embedded at generation
+# time. This is deliberate, not lazy: `sudo` inside a container resets $HOME
+# to /root, and with `--home` the box's $HOME differs from the host's, so any
+# runtime path resolution in these scripts would break. See README pitfalls.
+# ---------------------------------------------------------------------------
+
+template_reindex() {
+    # Runs INSIDE a box, as the regular user (never root: under distrobox's
+    # keep-id userns, container root maps to an unprivileged host subuid that
+    # cannot write the user's 0700 ~/.cache).
+    cat <<EOF
+#!/bin/sh
+# sora-reindex — generated by sora $SORA_VERSION. Do not edit.
+# Runs INSIDE a box, as the regular user. All paths are embedded at
+# generation time: sudo inside the container resets \$HOME, and the box may
+# have its own --home, so nothing here may depend on the runtime environment.
+CACHE_DIR='$SORA_CACHE'
+CONFIG_DIR='$SORA_CONFIG'
+MERGE='$SORA_DATA/libexec/sora-merge-index'
+EOF
+    cat <<'EOF'
+BOX="$1"
+[ -n "$BOX" ] || { echo "usage: sora-reindex <box>" >&2; exit 64; }
+
+mkdir -p "$CACHE_DIR/index.d"
+tmp="$CACHE_DIR/index.d/.$BOX.tmp"
+
+# Enumerate executables from the standard system dirs. A plain glob loop is
+# POSIX and fork-free, and works even on busybox-based boxes.
+{
+    for d in /usr/local/bin /usr/local/sbin /usr/bin /usr/sbin /bin /sbin /opt/bin; do
+        [ -d "$d" ] || continue
+        for f in "$d"/*; do
+            [ -x "$f" ] && [ ! -d "$f" ] && printf '%s\n' "${f##*/}"
+        done
+    done
+} | sort -u > "$tmp"
+mv -f "$tmp" "$CACHE_DIR/index.d/$BOX.list"
+
+# Stamp last_indexed in the box metadata, then rebuild the merged index.
+meta="$CONFIG_DIR/boxes/$BOX.toml"
+if [ -f "$meta" ]; then
+    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    if grep -q '^last_indexed' "$meta"; then
+        sed -i "s/^last_indexed = .*/last_indexed = \"$now\"/" "$meta"
+    else
+        printf 'last_indexed = "%s"\n' "$now" >> "$meta"
+    fi
+fi
+
+[ -x "$MERGE" ] && exec "$MERGE" "$CONFIG_DIR" "$CACHE_DIR"
+exit 0
+EOF
+}
+
+template_trigger() { # box
+    # Installed INSIDE the box at /usr/local/bin/sora-index-refresh and called
+    # by the package-manager hook, which runs as root. It must drop back to
+    # the real user before touching anything in the host home (pitfall: under
+    # keep-id, container root cannot write the user's 0700 ~/.cache).
+    local box=$1
+    cat <<EOF
+#!/bin/sh
+# sora-index-refresh — generated by sora $SORA_VERSION for box '$box'.
+# Do not edit. Called by the package manager's post-transaction hook (as
+# root); drops privileges back to the user and reindexes by writing the
+# host's cache DIRECTLY through the bind-mounted home — no host-exec IPC,
+# which is fragile in non-interactive contexts.
+REINDEX='$SORA_DATA/libexec/sora-reindex'
+SORA_USER='$SORA_USER_NAME'
+SORA_BOX='$box'
+EOF
+    cat <<'EOF'
+[ -x "$REINDEX" ] || exit 0
+if command -v runuser >/dev/null 2>&1; then
+    exec runuser -u "$SORA_USER" -- "$REINDEX" "$SORA_BOX"
+fi
+exec su "$SORA_USER" -s /bin/sh -c "\"$REINDEX\" \"$SORA_BOX\""
+EOF
+}
+
+template_pm_hook() { # dnf5|apt|pacman
+    case $1 in
+        dnf5) cat <<'EOF'
+# sora: refresh the host command index after every dnf transaction.
+# Field format: callback:package_filter:direction:options:command
+# An empty package_filter makes the command run exactly once per transaction.
+# Requires the 'libdnf5-plugin-actions' package (sora installs it).
+post_transaction::::/usr/local/bin/sora-index-refresh
+EOF
+        ;;
+        apt) cat <<'EOF'
+// sora: refresh the host command index after every dpkg run.
+DPkg::Post-Invoke {"/usr/local/bin/sora-index-refresh || true";};
+EOF
+        ;;
+        pacman) cat <<'EOF'
+# sora: refresh the host command index after every pacman transaction.
+# This file lives in /etc/pacman.d/hooks and deliberately does NOT contain
+# the string "distrobox" in its name: distrobox deletes libalpm hooks
+# matching *distrobox* inside its containers.
+
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = *
+
+[Action]
+Description = sora: refreshing host command index
+When = PostTransaction
+Exec = /usr/local/bin/sora-index-refresh
+EOF
+        ;;
+        *) die "unknown package-manager hook type '$1'" ;;
+    esac
+}
+
+pm_hook_path() { # dnf5|apt|pacman
+    case $1 in
+        dnf5)   printf '/etc/dnf/libdnf5-plugins/actions.d/sora.actions\n' ;;
+        apt)    printf '/etc/apt/apt.conf.d/99-sora-index\n' ;;
+        pacman) printf '/etc/pacman.d/hooks/sora-index.hook\n' ;;
+        *) die "unknown package-manager hook type '$1'" ;;
+    esac
+}
+
+template_inbox_install() { # dnf5|apt|pacman
+    # Runs as root INSIDE the box. Staged files are copied (as the user) into
+    # the container-private /tmp first: root inside a keep-id userns cannot
+    # read the host user's 0700 home, so this script may not reference it.
+    cat <<'EOF'
+#!/bin/sh
+# Generated by sora. Runs as root inside a box via 'sudo sh <this file>'.
+set -e
+STAGE=/tmp/.sora-stage
+install -m 0755 "$STAGE/sora-index-refresh" /usr/local/bin/sora-index-refresh
+EOF
+    case $1 in
+        dnf5) cat <<'EOF'
+# The actions plugin is not part of the fedora-toolbox image.
+if ! rpm -q libdnf5-plugin-actions >/dev/null 2>&1; then
+    if command -v dnf5 >/dev/null 2>&1; then
+        dnf5 -y install libdnf5-plugin-actions
+    else
+        dnf -y install libdnf5-plugin-actions
+    fi
+fi
+install -d /etc/dnf/libdnf5-plugins/actions.d
+install -m 0644 "$STAGE/pm-hook" /etc/dnf/libdnf5-plugins/actions.d/sora.actions
+EOF
+        ;;
+        apt) cat <<'EOF'
+install -d /etc/apt/apt.conf.d
+install -m 0644 "$STAGE/pm-hook" /etc/apt/apt.conf.d/99-sora-index
+EOF
+        ;;
+        pacman) cat <<'EOF'
+install -d /etc/pacman.d/hooks
+install -m 0644 "$STAGE/pm-hook" /etc/pacman.d/hooks/sora-index.hook
+EOF
+        ;;
+        *) die "unknown package-manager hook type '$1'" ;;
+    esac
+}
+
+template_detect_pm() {
+    cat <<'EOF'
+#!/bin/sh
+# sora-detect-pm — generated by sora. Runs inside a box as the user.
+# Detection is by binary presence, never by guessing from the image name.
+for pm in dnf5 dnf apt-get pacman zypper apk xbps-install emerge; do
+    command -v "$pm" >/dev/null 2>&1 && { printf '%s\n' "$pm"; exit 0; }
+done
+printf 'unknown\n'
+EOF
+}
+
+template_which() {
+    cat <<'EOF'
+#!/bin/sh
+# sora-which — generated by sora. Runs inside a box as the user.
+command -v -- "$1"
+EOF
+}
+
+# Materialize the user-level helper scripts under ~/.local/share/sora/libexec.
+# They live in the HOME on purpose: the home is bind-mounted inside every box
+# at the same absolute path, so in-box hooks can call them directly.
+ensure_libexec() {
+    local d="$SORA_DATA/libexec" tmp
+    mkdir -p "$d"
+    install -m 0755 "$SORA_SHARE/libexec/sora-merge-index" "$d/sora-merge-index"
+    for gen in reindex detect-pm which; do
+        tmp="$d/.sora-$gen.tmp"
+        "template_${gen//-/_}" > "$tmp"
+        chmod 0755 "$tmp"
+        mv -f "$tmp" "$d/sora-$gen"
+    done
+}
+
+merge_now() {
+    ensure_libexec
+    "$SORA_DATA/libexec/sora-merge-index" "$SORA_CONFIG" "$SORA_CACHE"
+}
+
+# Emit "cmd \t prio \t box" candidates with pins boosted (shared by
+# conflicts inspection; the merge script itself is standalone POSIX sh).
+emit_candidates() {
+    local f box prio meta
+    for f in "$LISTS_DIR"/*.list; do
+        [ -f "$f" ] || continue
+        box=${f##*/}; box=${box%.list}
+        prio=0
+        meta="$BOXES_DIR/$box.toml"
+        if [ -f "$meta" ]; then
+            prio=$(toml_get "$meta" priority)
+            [ -n "$prio" ] || prio=0
+        fi
+        awk -v b="$box" -v p="$prio" -v OFS='\t' 'NF == 1 { print $1, p, b }' "$f"
+    done | awk -F'\t' -v OFS='\t' -v pins="$PINS" '
+        BEGIN {
+            while ((getline line < pins) > 0) {
+                n = split(line, a, "\t")
+                if (n >= 2) pin[a[1]] = a[2]
+            }
+        }
+        { if (($1 in pin) && pin[$1] == $3) $2 = 1000000000; print }
+    '
+}
+
+# ---------------------------------------------------------------------------
+# Image catalog (advisory: any OCI image is accepted verbatim)
+# ---------------------------------------------------------------------------
+
+image_for_alias() {
+    case $1 in
+        fedora)              printf 'quay.io/fedora/fedora-toolbox:latest\n' ;;
+        ubuntu)              printf 'docker.io/library/ubuntu:latest\n' ;;
+        debian)              printf 'docker.io/library/debian:stable\n' ;;
+        arch|archlinux)      printf 'docker.io/library/archlinux:latest\n' ;;
+        opensuse|tumbleweed) printf 'registry.opensuse.org/opensuse/tumbleweed:latest\n' ;;
+        alpine)              printf 'docker.io/library/alpine:latest\n' ;;
+        *)                   printf '%s\n' "$1" ;;
+    esac
+}
+
+cmd_images() {
+    cat <<'EOF'
+Known image aliases (any other OCI image reference is accepted as-is):
+
+  fedora      quay.io/fedora/fedora-toolbox:latest
+  ubuntu      docker.io/library/ubuntu:latest
+  debian      docker.io/library/debian:stable
+  arch        docker.io/library/archlinux:latest
+  tumbleweed  registry.opensuse.org/opensuse/tumbleweed:latest
+  alpine      docker.io/library/alpine:latest
+
+Automatic reindex hooks are available for dnf5, apt and pacman boxes.
+Other package managers work fine, but need a manual 'sora reindex <box>'
+after installing packages.
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# XDG dir symlinks (box home -> host dirs)
+# ---------------------------------------------------------------------------
+
+setup_xdg_links() { # boxhome
+    # Trivial by design: the UID is identical inside and outside (keep-id) and
+    # the real host home is bind-mounted at the same absolute path, so plain
+    # symlinks work with no ACLs. Names are resolved with xdg-user-dir because
+    # the folders are localized ("Documentos", "Imagens", ...).
+    local boxhome=$1 d host base
+    if ! command -v xdg-user-dir >/dev/null 2>&1; then
+        warn "xdg-user-dir not found on the host; skipping XDG folder symlinks"
+        return 0
+    fi
+    for d in DOCUMENTS DOWNLOAD MUSIC PICTURES VIDEOS DESKTOP PUBLICSHARE TEMPLATES; do
+        host=$(xdg-user-dir "$d" 2>/dev/null) || continue
+        [ -n "$host" ] && [ -d "$host" ] || continue
+        [ "$host" = "$HOME" ] && continue   # xdg-user-dir falls back to $HOME
+        base=${host##*/}
+        if [ ! -e "$boxhome/$base" ] && [ ! -L "$boxhome/$base" ]; then
+            ln -s "$host" "$boxhome/$base"
+        fi
+    done
+}
+
+# ---------------------------------------------------------------------------
+# In-box hook installation
+# ---------------------------------------------------------------------------
+
+pm_family() { # detected binary -> hook type or "none"
+    case $1 in
+        dnf5)        printf 'dnf5\n' ;;
+        apt-get|apt) printf 'apt\n' ;;
+        pacman)      printf 'pacman\n' ;;
+        *)           printf 'none\n' ;;
+    esac
+}
+
+install_inbox_hooks() { # box pm-binary
+    local box=$1 pm=$2 hooktype stage
+    hooktype=$(pm_family "$pm")
+    if [ "$hooktype" = none ]; then
+        warn "no automatic reindex hook for '$pm'; run 'sora reindex $box' after installing packages"
+        return 0
+    fi
+
+    # Stage under the cache (inside the home, visible in the box for the
+    # user), then copy into container-private /tmp so that in-box ROOT can
+    # read it (root cannot traverse the user's 0700 home under keep-id).
+    mkdir -p "$SORA_CACHE"
+    stage=$(mktemp -d "$SORA_CACHE/stage.XXXXXX")
+    template_trigger "$box"            > "$stage/sora-index-refresh"
+    template_pm_hook "$hooktype"       > "$stage/pm-hook"
+    template_inbox_install "$hooktype" > "$stage/install-root.sh"
+    chmod 0644 "$stage"/*
+
+    distrobox enter --name "$box" -- rm -rf /tmp/.sora-stage &&
+    distrobox enter --name "$box" -- cp -r "$stage" /tmp/.sora-stage &&
+    distrobox enter --name "$box" -- sudo sh /tmp/.sora-stage/install-root.sh ||
+        { rm -rf "$stage"; die "failed to install the reindex hook inside '$box'"; }
+    distrobox enter --name "$box" -- rm -rf /tmp/.sora-stage || true
+    rm -rf "$stage"
+    info "installed $hooktype auto-reindex hook inside '$box' ($(pm_hook_path "$hooktype"))"
+}
+
+# ---------------------------------------------------------------------------
+# sora box ...
+# ---------------------------------------------------------------------------
+
+cmd_box_create() {
+    local name='' image='' priority=0 own_home=1 xdg_links=1 pm_override=''
+    local hides=() h flags boxhome pm count
+
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --image)          image=${2:?--image needs a value}; shift ;;
+            --priority)       priority=${2:?--priority needs a value}; shift ;;
+            --pkg-manager)    pm_override=${2:?--pkg-manager needs a value}; shift ;;
+            --no-own-home)    own_home=0 ;;
+            --no-xdg-links)   xdg_links=0 ;;
+            --hide)           hides+=("${2:?--hide needs a path}"); shift ;;
+            -*)               die "unknown option for 'box create': $1" ;;
+            *)                [ -z "$name" ] && name=$1 || die "unexpected argument: $1" ;;
+        esac
+        shift
+    done
+
+    [ -n "$name" ] || die "usage: sora box create <name> --image <image|alias> [options]"
+    case $name in (*[!A-Za-z0-9._-]*) die "box name may only contain [A-Za-z0-9._-]" ;; esac
+    box_configured "$name" && die "box '$name' is already managed by sora"
+    [ -n "$image" ] || die "--image is required; see 'sora images' for the catalog (any OCI image works)"
+    case $priority in (*[!0-9-]*|'') die "--priority must be an integer" ;; esac
+
+    need_cmd distrobox
+    container_manager >/dev/null
+    container_exists "$name" && die "a container named '$name' already exists (not created by sora)"
+
+    image=$(image_for_alias "$image")
+    ensure_libexec
+
+    local create_args=(create --name "$name" --image "$image" --yes)
+    if [ "$own_home" = 1 ]; then
+        # A dedicated home is ORGANIZATION, not isolation: it keeps box
+        # packages from scattering dotfiles into the host home. The host home
+        # stays bind-mounted at its absolute path regardless; use --hide for
+        # sensitive subpaths.
+        boxhome="$HOMES_DIR/$name"
+        mkdir -p "$boxhome"
+        create_args+=(--home "$boxhome")
+    else
+        boxhome="$HOME"
+    fi
+    if [ ${#hides[@]} -gt 0 ]; then
+        flags=""
+        for h in "${hides[@]}"; do
+            case $h in /*) ;; *) h="$HOME/$h" ;; esac
+            flags="$flags--mount type=tmpfs,dst=$h "
+        done
+        create_args+=(--additional-flags "${flags% }")
+    fi
+
+    info "creating box '$name' from $image ..."
+    distrobox "${create_args[@]}" || die "distrobox create failed"
+
+    info "detecting package manager (first enter initializes the box; this can take a while) ..."
+    if [ -n "$pm_override" ]; then
+        pm=$pm_override
+    else
+        pm=$(distrobox enter --name "$name" -- "$SORA_DATA/libexec/sora-detect-pm") || pm=unknown
+        pm=${pm:-unknown}
+    fi
+    info "package manager: $pm"
+
+    mkdir -p "$BOXES_DIR"
+    cat > "$(box_meta "$name")" <<EOF
+# Managed by sora. Editing priority / package_manager by hand is fine.
+image = "$image"
+package_manager = "$pm"
+home = "$boxhome"
+priority = $priority
+created = "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+last_indexed = ""
+EOF
+
+    if [ "$own_home" = 1 ] && [ "$xdg_links" = 1 ]; then
+        setup_xdg_links "$boxhome"
+        info "linked host XDG folders into the box home"
+    fi
+
+    install_inbox_hooks "$name" "$pm"
+
+    info "building the command index ..."
+    distrobox enter --name "$name" -- "$SORA_DATA/libexec/sora-reindex" "$name" ||
+        warn "initial indexing failed; run 'sora reindex $name'"
+
+    count=$(wc -l < "$LISTS_DIR/$name.list" 2>/dev/null || echo 0)
+    info "box '$name' is ready: $count commands indexed"
+    if ! grep -qs 'sora/shell/hook' "${ZDOTDIR:-$HOME}/.zshrc" "$HOME/.bashrc" 2>/dev/null &&
+       [ ! -f "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/zz-sora.fish" ]; then
+        info "next step: 'sora hook install' to enable late resolution in your shell"
+    fi
+}
+
+cmd_box_list() {
+    local meta name image pm prio last count status
+    if ! ls "$BOXES_DIR"/*.toml >/dev/null 2>&1; then
+        info "no boxes managed by sora yet - try 'sora box create'"
+        return 0
+    fi
+    printf '%-16s %-9s %-10s %-9s %-9s %-21s %s\n' NAME PRIORITY PKG-MGR COMMANDS STATUS LAST-INDEXED IMAGE
+    for meta in "$BOXES_DIR"/*.toml; do
+        name=${meta##*/}; name=${name%.toml}
+        image=$(toml_get "$meta" image)
+        pm=$(toml_get "$meta" package_manager)
+        prio=$(toml_get "$meta" priority)
+        last=$(toml_get "$meta" last_indexed)
+        count=$(wc -l < "$LISTS_DIR/$name.list" 2>/dev/null || echo 0)
+        if container_exists "$name"; then status=ok; else status=MISSING; fi
+        printf '%-16s %-9s %-10s %-9s %-9s %-21s %s\n' \
+            "$name" "${prio:-0}" "${pm:-?}" "$count" "$status" "${last:--}" "$image"
+    done
+}
+
+cmd_box_enter() {
+    local name=${1:?usage: sora box enter <name>}
+    require_box "$name"
+    shift
+    exec distrobox enter --name "$name" "$@"
+}
+
+cmd_box_rm() {
+    local name='' assume_yes=0 delete_home=0 home box wrapper
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --yes|-y)      assume_yes=1 ;;
+            --delete-home) delete_home=1 ;;
+            -*)            die "unknown option for 'box rm': $1" ;;
+            *)             [ -z "$name" ] && name=$1 || die "unexpected argument: $1" ;;
+        esac
+        shift
+    done
+    [ -n "$name" ] || die "usage: sora box rm <name> [--yes] [--delete-home]"
+    require_box "$name"
+    home=$(toml_get "$(box_meta "$name")" home)
+
+    if [ "$assume_yes" != 1 ]; then
+        confirm "remove box '$name' (container + sora metadata)?" || die "aborted"
+    fi
+
+    if container_exists "$name"; then
+        distrobox rm --force "$name" || warn "distrobox rm failed; continuing with metadata cleanup"
+    else
+        info "container '$name' does not exist; cleaning up metadata only"
+    fi
+
+    # Drop anxious wrappers that point into this box.
+    if [ -f "$ANXIOUS_REG" ]; then
+        while IFS=$TAB read -r _ box _ wrapper _; do
+            [ "$box" = "$name" ] && rm -f "$wrapper"
+        done < "$ANXIOUS_REG"
+        awk -F'\t' -v b="$name" '$2 != b' "$ANXIOUS_REG" > "$ANXIOUS_REG.tmp" &&
+            mv "$ANXIOUS_REG.tmp" "$ANXIOUS_REG"
+    fi
+    # Drop pins that point into this box.
+    if [ -f "$PINS" ] && grep -q "$TAB$name\$" "$PINS"; then
+        awk -F'\t' -v b="$name" '$2 != b' "$PINS" > "$PINS.tmp" && mv "$PINS.tmp" "$PINS"
+        info "removed pins targeting '$name'"
+    fi
+
+    rm -f "$(box_meta "$name")" "$LISTS_DIR/$name.list"
+    merge_now
+    info "box '$name' removed"
+
+    if [ -n "$home" ] && [ "$home" != "$HOME" ] && [ -d "$home" ]; then
+        if [ "$delete_home" = 1 ]; then
+            rm -rf "$home"
+            info "deleted box home $home"
+        else
+            info "box home kept at $home (use --delete-home to remove it)"
+        fi
+    fi
+}
+
+cmd_box_set_priority() {
+    local name=${1:?usage: sora box set-priority <name> <integer>}
+    local prio=${2:?usage: sora box set-priority <name> <integer>}
+    require_box "$name"
+    case $prio in (*[!0-9-]*|'') die "priority must be an integer" ;; esac
+    toml_set "$(box_meta "$name")" priority "$prio" raw
+    merge_now
+    info "box '$name' priority set to $prio; index rebuilt"
+}
+
+cmd_box() {
+    local sub=${1:-}
+    [ -n "$sub" ] && shift || true
+    case $sub in
+        create)       cmd_box_create "$@" ;;
+        list|ls)      cmd_box_list "$@" ;;
+        enter)        cmd_box_enter "$@" ;;
+        rm|remove)    cmd_box_rm "$@" ;;
+        set-priority) cmd_box_set_priority "$@" ;;
+        *) die "usage: sora box <create|list|enter|rm|set-priority> ..." ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Index commands
+# ---------------------------------------------------------------------------
+
+cmd_reindex() {
+    local boxes=() meta name any=0
+    if [ $# -gt 0 ]; then
+        boxes=("$@")
+    else
+        [ -d "$BOXES_DIR" ] || die "no boxes managed by sora yet"
+        for meta in "$BOXES_DIR"/*.toml; do
+            [ -f "$meta" ] || die "no boxes managed by sora yet"
+            name=${meta##*/}; boxes+=("${name%.toml}")
+        done
+    fi
+    need_cmd distrobox
+    ensure_libexec
+    for name in "${boxes[@]}"; do
+        require_box "$name"
+        if container_exists "$name"; then
+            info "reindexing '$name' ..."
+            distrobox enter --name "$name" -- "$SORA_DATA/libexec/sora-reindex" "$name" &&
+                any=1 || warn "reindex failed for '$name'"
+        else
+            warn "container '$name' does not exist; skipping (consider 'sora box rm $name')"
+        fi
+    done
+    # The in-box script already merges, but merge again so skipped/removed
+    # boxes are reflected too.
+    merge_now
+    [ "$any" = 1 ] && info "index rebuilt: $(wc -l < "$INDEX") commands"
+}
+
+cmd_conflicts() {
+    [ -d "$LISTS_DIR" ] || die "no index data yet - run 'sora reindex'"
+    local out
+    out=$(emit_candidates | sort -t "$TAB" -k1,1 -k2,2nr -k3,3 | awk -F'\t' '
+        function flush(   i, tag) {
+            if (n > 1) {
+                tag = (prios[1] >= 1000000000) ? "pinned" : "priority " prios[1]
+                printf "%-24s -> %-14s (%s)\n", cur, boxes[1], tag
+                for (i = 2; i <= n; i++)
+                    printf "%-24s    also in %-11s (priority %s)\n", "", boxes[i], prios[i]
+            }
+        }
+        $1 != cur { flush(); cur = $1; n = 0 }
+        { n++; boxes[n] = $3; prios[n] = $2 }
+        END { flush() }
+    ')
+    if [ -n "$out" ]; then
+        printf '%s\n' "$out"
+    else
+        info "no conflicts: every indexed command exists in exactly one box"
+    fi
+}
+
+cmd_pin() {
+    local cmd box list
+    case ${1:-} in
+        --list|-l)
+            if [ -s "$PINS" ]; then
+                awk -F'\t' '{ printf "%-24s -> %s\n", $1, $2 }' "$PINS"
+            else
+                info "no pins configured"
+            fi
+            ;;
+        --remove|-r)
+            cmd=${2:?usage: sora pin --remove <command>}
+            [ -f "$PINS" ] && grep -q "^$cmd$TAB" "$PINS" || die "'$cmd' is not pinned"
+            awk -F'\t' -v c="$cmd" '$1 != c' "$PINS" > "$PINS.tmp" && mv "$PINS.tmp" "$PINS"
+            merge_now
+            info "unpinned '$cmd'; index rebuilt"
+            ;;
+        -*|'')
+            die "usage: sora pin <command> <box> | sora pin --list | sora pin --remove <command>"
+            ;;
+        *)
+            cmd=$1
+            box=${2:?usage: sora pin <command> <box>}
+            require_box "$box"
+            list="$LISTS_DIR/$box.list"
+            if ! { [ -f "$list" ] && grep -Fqx "$cmd" "$list"; }; then
+                warn "'$cmd' is not currently indexed in box '$box'; the pin stays dormant until it is"
+            fi
+            mkdir -p "$SORA_CONFIG"
+            touch "$PINS"
+            awk -F'\t' -v c="$cmd" '$1 != c' "$PINS" > "$PINS.tmp"
+            printf '%s\t%s\n' "$cmd" "$box" >> "$PINS.tmp"
+            mv "$PINS.tmp" "$PINS"
+            merge_now
+            info "pinned '$cmd' -> '$box'; index rebuilt"
+            ;;
+    esac
+}
+
+cmd_which() {
+    local cmd=${1:?usage: sora which <command>} hostpath box found=0
+    if hostpath=$(command -v -- "$cmd" 2>/dev/null); then
+        printf 'host:  %s\n' "$hostpath"
+        printf '       host binaries always win; the shell hook never fires for this command.\n'
+        found=1
+    fi
+    if [ -r "$INDEX" ]; then
+        box=$(awk -F'\t' -v c="$cmd" '$1 == c { print $2; exit }' "$INDEX")
+        if [ -n "$box" ]; then
+            printf 'index: box '\''%s'\'' -> distrobox enter --name %s -- %s\n' "$box" "$box" "$cmd"
+            if [ -f "$PINS" ] && grep -q "^$cmd$TAB$box\$" "$PINS"; then
+                printf '       (pinned)\n'
+            fi
+            found=1
+        fi
+    fi
+    if [ "$found" = 0 ]; then
+        printf "sora: '%s' was not found on the host nor in any box.\n" "$cmd" >&2
+        return 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# sora anxious — eager, on-demand export (delegates to distrobox-export)
+# ---------------------------------------------------------------------------
+
+anxious_list() {
+    if [ -s "$ANXIOUS_REG" ]; then
+        printf '%-20s %-16s %-6s %s\n' COMMAND BOX SUDO WRAPPER
+        awk -F'\t' '{ printf "%-20s %-16s %-6s %s\n", $1, $2, ($3 == "sudo" ? "yes" : "no"), $4 }' "$ANXIOUS_REG"
+    else
+        info "nothing exported yet - try: sora anxious <command> --box <box>"
+    fi
+}
+
+anxious_remove() {
+    local cmd=$1 line box binpath wrapper
+    [ -f "$ANXIOUS_REG" ] || die "'$cmd' is not exported"
+    line=$(awk -F'\t' -v c="$cmd" '$1 == c { print; exit }' "$ANXIOUS_REG")
+    [ -n "$line" ] || die "'$cmd' is not exported"
+    box=$(printf '%s' "$line" | cut -f2)
+    wrapper=$(printf '%s' "$line" | cut -f4)
+    binpath=$(printf '%s' "$line" | cut -f5)
+    if container_exists "$box"; then
+        distrobox enter --name "$box" -- distrobox-export --bin "$binpath" \
+            --export-path "$EXPORT_PATH" --delete >/dev/null 2>&1 || rm -f "$wrapper"
+    else
+        rm -f "$wrapper"
+    fi
+    [ -e "$wrapper" ] && rm -f "$wrapper"
+    awk -F'\t' -v c="$cmd" '$1 != c' "$ANXIOUS_REG" > "$ANXIOUS_REG.tmp" &&
+        mv "$ANXIOUS_REG.tmp" "$ANXIOUS_REG"
+    info "removed exported wrapper for '$cmd'"
+}
+
+cmd_anxious() {
+    local cmd='' box='' use_sudo=0 mode=add binpath sudoflag
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --list|-l)   mode=list ;;
+            --remove|-r) mode=remove; [ $# -ge 2 ] && { cmd=$2; shift; } ;;
+            --sudo)      use_sudo=1 ;;
+            --box|-b)    box=${2:?--box needs a value}; shift ;;
+            -*)          die "unknown option for 'anxious': $1" ;;
+            *)           [ -z "$cmd" ] && cmd=$1 || die "unexpected argument: $1" ;;
+        esac
+        shift
+    done
+
+    case $mode in
+        list)   anxious_list; return ;;
+        remove) [ -n "$cmd" ] || die "usage: sora anxious --remove <command>"
+                anxious_remove "$cmd"; return ;;
+    esac
+
+    [ -n "$cmd" ] || die "usage: sora anxious [--sudo] <command> --box <box>"
+    [ -n "$box" ] || die "--box is required (which box provides '$cmd'?)"
+    case $cmd in (*[!A-Za-z0-9._+-]*) die "command name may only contain [A-Za-z0-9._+-]" ;; esac
+    need_cmd distrobox
+    container_exists "$box" || die "container '$box' does not exist"
+    box_configured "$box" || warn "box '$box' is not managed by sora; exporting anyway"
+
+    ensure_libexec
+    binpath=$(distrobox enter --name "$box" -- "$SORA_DATA/libexec/sora-which" "$cmd") ||
+        die "'$cmd' was not found inside box '$box'"
+    [ -n "$binpath" ] || die "'$cmd' was not found inside box '$box'"
+
+    mkdir -p "$EXPORT_PATH"
+    local extra=()
+    [ "$use_sudo" = 1 ] && extra+=(--sudo)
+    distrobox enter --name "$box" -- distrobox-export --bin "$binpath" \
+        --export-path "$EXPORT_PATH" "${extra[@]}" ||
+        die "distrobox-export failed for '$cmd' in '$box'"
+
+    mkdir -p "$SORA_CONFIG"
+    touch "$ANXIOUS_REG"
+    sudoflag=nosudo; [ "$use_sudo" = 1 ] && sudoflag=sudo
+    awk -F'\t' -v c="$cmd" '$1 != c' "$ANXIOUS_REG" > "$ANXIOUS_REG.tmp"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$cmd" "$box" "$sudoflag" "$EXPORT_PATH/$cmd" "$binpath" \
+        >> "$ANXIOUS_REG.tmp"
+    mv "$ANXIOUS_REG.tmp" "$ANXIOUS_REG"
+
+    info "exported '$cmd' from '$box' -> $EXPORT_PATH/$cmd"
+    if [ "$use_sudo" = 1 ]; then
+        info "the wrapper runs '$cmd' with sudo INSIDE the container."
+        info "type it WITHOUT host sudo ('$cmd ...', not 'sudo $cmd ...'):"
+        info "host sudo would target podman's rootful storage and break everything."
+    fi
+    case ":$PATH:" in
+        *":$EXPORT_PATH:"*) ;;
+        *) warn "$EXPORT_PATH is not in your PATH; the wrapper will not be found" ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# sora hook — shell hook installation
+# ---------------------------------------------------------------------------
+
+hook_file() { # bash|zsh|fish
+    printf '%s\n' "$SORA_SHARE/shell/hook.$1"
+}
+
+hook_rc_target() { # bash|zsh|fish
+    case $1 in
+        bash) printf '%s\n' "$HOME/.bashrc" ;;
+        zsh)  printf '%s\n' "${ZDOTDIR:-$HOME}/.zshrc" ;;
+        fish) printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/zz-sora.fish" ;;
+    esac
+}
+
+hook_installed() { # bash|zsh|fish
+    local rc
+    rc=$(hook_rc_target "$1")
+    case $1 in
+        fish) [ -f "$rc" ] ;;
+        *)    grep -qs 'sora/shell/hook' "$rc" ;;
+    esac
+}
+
+hook_install_one() { # bash|zsh|fish
+    local shell=$1 rc file
+    rc=$(hook_rc_target "$shell")
+    file=$(hook_file "$shell")
+    if hook_installed "$shell"; then
+        info "$shell: already installed ($rc)"
+        return 0
+    fi
+    case $shell in
+        fish)
+            mkdir -p "$(dirname "$rc")"
+            printf '# sora: late resolution of distrobox commands\nsource "%s"\n' "$file" > "$rc"
+            ;;
+        *)
+            {
+                printf '\n# sora: resolve distrobox commands on command-not-found.\n'
+                printf '# Keep this near the END of the file so sora can chain to other handlers.\n'
+                printf '[ -f "%s" ] && . "%s"\n' "$file" "$file"
+            } >> "$rc"
+            ;;
+    esac
+    info "$shell: hook installed in $rc (open a new shell to activate)"
+}
+
+cmd_hook() {
+    local sub=${1:-} shell
+    [ -n "$sub" ] && shift || true
+    case $sub in
+        print)
+            shell=${1:?usage: sora hook print <bash|zsh|fish>}
+            case $shell in bash|zsh|fish) ;; *) die "unknown shell '$shell'" ;; esac
+            printf 'source "%s"\n' "$(hook_file "$shell")"
+            ;;
+        install)
+            local shells=()
+            if [ $# -gt 0 ]; then
+                for shell in "$@"; do
+                    case $shell in bash|zsh|fish) shells+=("$shell") ;; *) die "unknown shell '$shell'" ;; esac
+                done
+            else
+                # Default: every shell present on the host.
+                command -v bash >/dev/null 2>&1 && shells+=(bash)
+                command -v zsh  >/dev/null 2>&1 && shells+=(zsh)
+                command -v fish >/dev/null 2>&1 && shells+=(fish)
+            fi
+            for shell in "${shells[@]}"; do
+                hook_install_one "$shell"
+            done
+            ;;
+        status)
+            for shell in bash zsh fish; do
+                if hook_installed "$shell"; then
+                    printf '%-5s installed  (%s)\n' "$shell" "$(hook_rc_target "$shell")"
+                else
+                    printf '%-5s not installed\n' "$shell"
+                fi
+            done
+            ;;
+        *)
+            die "usage: sora hook <install [shells...]|status|print <shell>>"
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# sora doctor
+# ---------------------------------------------------------------------------
+
+cmd_doctor() {
+    local problems=0 meta name shell
+    ok()  { printf '  ok   %s\n' "$*"; }
+    bad() { printf '  FAIL %s\n' "$*"; problems=$((problems + 1)); }
+
+    printf 'sora doctor:\n'
+    command -v distrobox >/dev/null 2>&1 && ok "distrobox found" || bad "distrobox not found"
+    if command -v podman >/dev/null 2>&1 || command -v docker >/dev/null 2>&1; then
+        ok "container manager found ($(container_manager))"
+    else
+        bad "no container manager (podman/docker)"
+    fi
+    command -v awk >/dev/null 2>&1 && ok "awk found" || bad "awk not found (the shell hook needs it)"
+    command -v xdg-user-dir >/dev/null 2>&1 && ok "xdg-user-dir found" ||
+        bad "xdg-user-dir not found (XDG folder symlinks unavailable)"
+
+    if [ -s "$INDEX" ]; then
+        ok "index present: $(wc -l < "$INDEX") commands ($INDEX)"
+    else
+        bad "index missing or empty - run 'sora reindex'"
+    fi
+
+    if [ -d "$BOXES_DIR" ]; then
+        for meta in "$BOXES_DIR"/*.toml; do
+            [ -f "$meta" ] || break
+            name=${meta##*/}; name=${name%.toml}
+            if container_exists "$name"; then
+                ok "box '$name': container present"
+            else
+                bad "box '$name': container MISSING (run 'sora box rm $name' or recreate it)"
+            fi
+        done
+    fi
+
+    for shell in bash zsh fish; do
+        command -v "$shell" >/dev/null 2>&1 || continue
+        if hook_installed "$shell"; then
+            ok "$shell hook installed"
+        else
+            bad "$shell hook not installed (run 'sora hook install $shell')"
+        fi
+    done
+
+    case ":$PATH:" in
+        *":$EXPORT_PATH:"*) ok "$EXPORT_PATH is in PATH (anxious exports will resolve)" ;;
+        *) bad "$EXPORT_PATH is NOT in PATH (anxious exports will not resolve)" ;;
+    esac
+
+    if [ "$problems" = 0 ]; then
+        info "all checks passed"
+    else
+        die "$problems problem(s) found"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Hidden template inspection (used by the test suite; content generation is
+# where quoting bugs hide, so the tests assert on GENERATED content)
+# ---------------------------------------------------------------------------
+
+cmd_template() {
+    local what=${1:?usage: sora _template <dnf5|apt|pacman|trigger|reindex|inbox-install|detect-pm|which> [arg]}
+    case $what in
+        dnf5|apt|pacman) template_pm_hook "$what" ;;
+        trigger)         template_trigger "${2:?_template trigger needs a box name}" ;;
+        reindex)         template_reindex ;;
+        inbox-install)   template_inbox_install "${2:?_template inbox-install needs a pm type}" ;;
+        detect-pm)       template_detect_pm ;;
+        which)           template_which ;;
+        *) die "unknown template '$what'" ;;
+    esac
+}
+
+cmd_template_path() {
+    pm_hook_path "${1:?usage: sora _template-path <dnf5|apt|pacman>}"
+}
+
+# ---------------------------------------------------------------------------
+# Help / dispatch
+# ---------------------------------------------------------------------------
+
+usage() {
+    cat <<'EOF'
+sora — distrobox commands as if they were native host commands
+
+Boxes
+  sora box create <name> --image <image|alias> [--priority N]
+                  [--pkg-manager PM] [--no-own-home] [--no-xdg-links]
+                  [--hide PATH]...
+  sora box list
+  sora box enter <name>
+  sora box rm <name> [--yes] [--delete-home]
+  sora box set-priority <name> <N>
+  sora images                      show the image alias catalog
+
+Index (late resolution)
+  sora reindex [box...]            rebuild the command->box index
+  sora conflicts                   commands present in more than one box
+  sora pin <command> <box>         force a command to resolve to one box
+  sora pin --list | --remove <command>
+  sora which <command>             how a command would resolve (host vs box)
+
+Eager export
+  sora anxious [--sudo] <command> --box <box>
+  sora anxious --list
+  sora anxious --remove <command>
+
+Shell integration
+  sora hook install [bash zsh fish]   install the command-not-found hook
+  sora hook status
+  sora hook print <shell>
+
+Maintenance
+  sora doctor                      sanity-check the whole setup
+  sora version
+EOF
+}
+
+main() {
+    local cmd=${1:-}
+    [ -n "$cmd" ] && shift || { usage; exit 64; }
+    case $cmd in
+        box)             cmd_box "$@" ;;
+        images)          cmd_images "$@" ;;
+        reindex)         cmd_reindex "$@" ;;
+        conflicts)       cmd_conflicts "$@" ;;
+        pin)             cmd_pin "$@" ;;
+        which)           cmd_which "$@" ;;
+        anxious)         cmd_anxious "$@" ;;
+        hook)            cmd_hook "$@" ;;
+        doctor)          cmd_doctor "$@" ;;
+        _template)       cmd_template "$@" ;;
+        _template-path)  cmd_template_path "$@" ;;
+        version|--version|-V) printf 'sora %s\n' "$SORA_VERSION" ;;
+        help|--help|-h)  usage ;;
+        *) printf 'sora: unknown command: %s\n\n' "$cmd" >&2; usage >&2; exit 64 ;;
+    esac
+}
+
+main "$@"

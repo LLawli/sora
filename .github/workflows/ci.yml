@@ -1,0 +1,29 @@
+# CI — the common ground for contributions: every push and PR runs the test
+# suite (against real bash, zsh and fish) and a strict shellcheck pass.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shells under test
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh fish
+      - name: Run test suite
+        run: bash tests/run.sh
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: shellcheck
+        run: make lint

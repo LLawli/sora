@@ -1,0 +1,87 @@
+# Release — triggered by a version tag (the flow is: bin/release X.Y.Z, then
+# git push origin main vX.Y.Z). Builds nothing (pure shell): the release
+# tarball IS the artifact, and every install path (AUR, COPR, curl|sh,
+# manual download) consumes that same tarball.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shells under test
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh fish shellcheck
+
+      - name: Run test suite and lint
+        run: |
+          bash tests/run.sh
+          make lint
+
+      - name: Check tag matches SORA_VERSION
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          CODE_VERSION=$(grep -oP '^SORA_VERSION="\K[^"]+' bin/sora)
+          if [ "$VERSION" != "$CODE_VERSION" ]; then
+            echo "tag v$VERSION does not match SORA_VERSION=$CODE_VERSION in bin/sora" >&2
+            exit 1
+          fi
+
+      - name: Build tarball and checksums
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git archive --format=tar.gz --prefix="sora-$VERSION/" \
+            -o "sora-$VERSION.tar.gz" "$GITHUB_REF_NAME"
+          sha256sum "sora-$VERSION.tar.gz" > "sora-$VERSION.tar.gz.sha256"
+
+      - name: Extract changelog section
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VERSION" '
+            BEGIN { hdr = "## [" ver "]" }
+            index($0, hdr) == 1 { flag = 1; next }
+            flag && index($0, "## [") == 1 { exit }
+            flag { print }
+          ' CHANGELOG.md > release_body.md
+          {
+            echo
+            echo "## Install"
+            echo
+            echo '```sh'
+            echo "# From the tarball"
+            echo "curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/sora-$VERSION.tar.gz | tar xz"
+            echo "make -C sora-$VERSION install PREFIX=~/.local"
+            echo '```'
+            echo
+            echo "See the [README](https://github.com/${GITHUB_REPOSITORY}#installation) for COPR, AUR and other paths."
+            echo
+            echo "## Checksums"
+            echo
+            echo '```'
+            cat "sora-$VERSION.tar.gz.sha256"
+            echo '```'
+          } >> release_body.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_body.md
+          files: |
+            sora-*.tar.gz
+            sora-*.tar.gz.sha256
+
+      # TODO once the AUR package exists: publish with
+      # KSXGitHub/github-actions-deploy-aur, injecting the tarball sha256 into
+      # packaging/PKGBUILD (see docs/releasing.md). COPR builds pull the spec
+      # from the tag via its webhook — no job needed here.

@@ -9,6 +9,8 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-10
+
 ### Fixed
 
 - Reindex now scans `/usr/games` and `/usr/local/games` — Debian/Ubuntu

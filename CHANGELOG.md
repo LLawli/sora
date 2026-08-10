@@ -9,6 +9,26 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ## [Unreleased]
 
+### Fixed
+
+- Homebrew installs no longer embed the versioned Cellar keg path: share-dir
+  resolution now prefers the stable prefix (`$(brew --prefix)/share/sora`),
+  so rc hook lines survive `brew upgrade` + cleanup.
+- `sora hook install` now repairs rc lines that point at a hook file which
+  no longer exists (e.g. a removed keg), instead of reporting "already
+  installed" while the hook is silently dead.
+- The bash hook sets `shopt -s checkhash`: a binary removed after being
+  hashed (e.g. `brew uninstall neovim`) now falls through to late resolution
+  instead of failing forever with "No such file or directory" at the old
+  path.
+
+### Added
+
+- `sora doctor` now detects rc hook lines pointing at missing files, and
+  dangling PATH symlinks that shadow indexed commands (both defeat late
+  resolution invisibly).
+- `sora sync` as an alias of `sora reindex`.
+
 ## [0.1.1] - 2026-08-10
 
 ### Fixed

@@ -37,18 +37,31 @@ TAB=$(printf '\t')
 # Where the shipped shell hooks and merge script live. Two layouts:
 #   installed:    PREFIX/bin/sora + PREFIX/share/sora/{shell,libexec}
 #   dev checkout: repo/bin/sora   + repo/{shell,libexec}
+#
+# The UNRESOLVED location is tried first, on purpose: under Homebrew,
+# bin/sora is a symlink into a versioned Cellar keg, and following it would
+# embed a path that dies on the next upgrade — 'hook install' writes this
+# path into rc files, so it must be the stable prefix
+# (e.g. /home/linuxbrew/.linuxbrew/share/sora), never the keg. The resolved
+# location stays as a fallback for e.g. ~/bin/sora -> checkout symlinks.
 resolve_share() {
-    local self root
-    self=$(readlink -f "${BASH_SOURCE[0]:-$0}")
-    root=$(dirname "$(dirname "$self")")
-    if [ -d "$root/share/sora/shell" ]; then
-        printf '%s\n' "$root/share/sora"
-    elif [ -d "$root/shell" ]; then
-        printf '%s\n' "$root"
-    else
-        printf 'sora: error: cannot locate the sora share directory near %s\n' "$self" >&2
-        exit 1
-    fi
+    local self dir cand root
+    self="${BASH_SOURCE[0]:-$0}"
+    dir=$(cd "$(dirname "$self")" 2>/dev/null && pwd) || dir=""
+    for cand in "$dir" "$(dirname "$(readlink -f "$self")")"; do
+        [ -n "$cand" ] || continue
+        root=$(dirname "$cand")
+        if [ -d "$root/share/sora/shell" ]; then
+            printf '%s\n' "$root/share/sora"
+            return 0
+        fi
+        if [ -d "$root/shell" ] && [ -d "$root/libexec" ]; then
+            printf '%s\n' "$root"
+            return 0
+        fi
+    done
+    printf 'sora: error: cannot locate the sora share directory near %s\n' "$self" >&2
+    exit 1
 }
 SORA_SHARE=$(resolve_share)
 
@@ -920,26 +933,36 @@ hook_installed() { # bash|zsh|fish
 }
 
 hook_install_one() { # bash|zsh|fish
-    local shell=$1 rc file
+    local shell=$1 rc file tmp
     rc=$(hook_rc_target "$shell")
     file=$(hook_file "$shell")
-    if hook_installed "$shell"; then
-        info "$shell: already installed ($rc)"
+    if [ "$shell" = fish ]; then
+        # A file we own: rewriting is naturally idempotent AND self-repairing.
+        mkdir -p "$(dirname "$rc")"
+        printf '# sora: late resolution of distrobox commands\nsource "%s"\n' "$file" > "$rc"
+        info "$shell: hook installed in $rc (open a new shell to activate)"
         return 0
     fi
-    case $shell in
-        fish)
-            mkdir -p "$(dirname "$rc")"
-            printf '# sora: late resolution of distrobox commands\nsource "%s"\n' "$file" > "$rc"
-            ;;
-        *)
-            {
-                printf '\n# sora: resolve distrobox commands on command-not-found.\n'
-                printf '# Keep this near the END of the file so sora can chain to other handlers.\n'
-                printf '[ -f "%s" ] && . "%s"\n' "$file" "$file"
-            } >> "$rc"
-            ;;
-    esac
+    if hook_installed "$shell"; then
+        if grep -qsF "$file" "$rc"; then
+            info "$shell: already installed ($rc)"
+            return 0
+        fi
+        # Repair: the rc references a hook path from a different install —
+        # typically a versioned Homebrew keg that an upgrade removed, which
+        # would kill the hook silently. Drop the old block and re-append.
+        tmp=$(mktemp)
+        grep -v -e 'sora: resolve distrobox commands' \
+                -e 'Keep this near the END of the file so sora' \
+                -e 'sora/shell/hook\.' "$rc" > "$tmp"
+        mv "$tmp" "$rc"
+        info "$shell: refreshing stale hook path in $rc"
+    fi
+    {
+        printf '\n# sora: resolve distrobox commands on command-not-found.\n'
+        printf '# Keep this near the END of the file so sora can chain to other handlers.\n'
+        printf '[ -f "%s" ] && . "%s"\n' "$file" "$file"
+    } >> "$rc"
     info "$shell: hook installed in $rc (open a new shell to activate)"
 }
 
@@ -1021,14 +1044,48 @@ cmd_doctor() {
         done
     fi
 
+    local rc hookpath
     for shell in bash zsh fish; do
         command -v "$shell" >/dev/null 2>&1 || continue
-        if hook_installed "$shell"; then
-            ok "$shell hook installed"
-        else
+        if ! hook_installed "$shell"; then
             bad "$shell hook not installed (run 'sora hook install $shell')"
+            continue
+        fi
+        # Installed is not enough: the rc line must point at a file that
+        # still exists (a removed Homebrew keg kills the hook silently).
+        rc=$(hook_rc_target "$shell")
+        case $shell in
+            fish) hookpath=$(sed -n 's/^source "\(.*\)"$/\1/p' "$rc" | tail -1) ;;
+            *)    hookpath=$(sed -n 's/^\[ -f "\(.*\)" \] && .*/\1/p' "$rc" |
+                      grep "sora/shell/hook\.$shell" | tail -1) ;;
+        esac
+        if [ -n "$hookpath" ] && [ ! -f "$hookpath" ]; then
+            bad "$shell hook points at a missing file ($hookpath) - run 'sora hook install $shell' to repair"
+        else
+            ok "$shell hook installed"
         fi
     done
+
+    # Broken PATH entries defeat late resolution: the shell "finds" the
+    # corpse, fails with ENOENT, and the command-not-found hook never fires.
+    if [ -s "$INDEX" ]; then
+        local dir entry name found_dangling=0
+        local IFS=':'
+        for dir in $PATH; do
+            unset IFS
+            [ -d "$dir" ] || continue
+            for entry in "$dir"/*; do
+                [ -L "$entry" ] && [ ! -e "$entry" ] || continue
+                name=${entry##*/}
+                if awk -F'\t' -v c="$name" '$1 == c { f = 1; exit } END { exit !f }' "$INDEX"; then
+                    bad "dangling symlink $entry shadows indexed command '$name' (remove it so the hook can fire)"
+                    found_dangling=1
+                fi
+            done
+        done
+        unset IFS
+        [ "$found_dangling" = 0 ] && ok "no dangling PATH entries shadow indexed commands"
+    fi
 
     case ":$PATH:" in
         *":$EXPORT_PATH:"*) ok "$EXPORT_PATH is in PATH (anxious exports will resolve)" ;;
@@ -1083,7 +1140,7 @@ Boxes
   sora images                      show the image alias catalog
 
 Index (late resolution)
-  sora reindex [box...]            rebuild the command->box index
+  sora reindex [box...]            rebuild the command->box index (alias: sync)
   sora conflicts                   commands present in more than one box
   sora pin <command> <box>         force a command to resolve to one box
   sora pin --list | --remove <command>
@@ -1111,7 +1168,7 @@ main() {
     case $cmd in
         box)             cmd_box "$@" ;;
         images)          cmd_images "$@" ;;
-        reindex)         cmd_reindex "$@" ;;
+        reindex|sync)    cmd_reindex "$@" ;;
         conflicts)       cmd_conflicts "$@" ;;
         pin)             cmd_pin "$@" ;;
         which)           cmd_which "$@" ;;

@@ -69,4 +69,51 @@ rm -f "$HOME/.bashrc"; touch "$HOME/.bashrc"
 assert_eq "$(grep -c 'sora: resolve distrobox commands' "$HOME/.bashrc")" 1 \
     "hook install is idempotent from a checkout not named 'sora'"
 
+# --- Homebrew-style layout: version-stable paths ----------------------------
+# Under brew, bin/sora is a symlink into a versioned Cellar keg while
+# PREFIX/share/sora is a stable linked path. resolve_share must prefer the
+# UNRESOLVED location: embedding the keg path in rc files kills the hook on
+# the next upgrade.
+BREW="$SANDBOX/brewprefix"
+KEG="$BREW/Cellar/sora/9.9.9"
+mkdir -p "$KEG/bin" "$KEG/share/sora" "$BREW/bin" "$BREW/share"
+cp "$REPO_DIR/bin/sora" "$KEG/bin/sora"
+cp -r "$REPO_DIR/shell" "$KEG/share/sora/shell"
+cp -r "$REPO_DIR/libexec" "$KEG/share/sora/libexec"
+ln -s ../Cellar/sora/9.9.9/bin/sora "$BREW/bin/sora"
+ln -s ../Cellar/sora/9.9.9/share/sora "$BREW/share/sora"
+out=$("$BREW/bin/sora" hook print bash)
+assert_contains "$out" "$BREW/share/sora/shell/hook.bash" \
+    "brew layout resolves to the stable prefix path"
+assert_not_contains "$out" "Cellar" "brew layout must never leak the versioned keg path"
+
+# --- hook install repairs a dead hook path ----------------------------------
+# Simulate an rc whose sora block points at a removed keg: install must
+# replace the block (once), not duplicate it or report 'already installed'.
+rm -f "$HOME/.bashrc"
+{
+    printf '# sora: resolve distrobox commands on command-not-found.\n'
+    printf '# Keep this near the END of the file so sora can chain to other handlers.\n'
+    printf '[ -f "/gone/Cellar/sora/0.0.1/share/sora/shell/hook.bash" ] && . "/gone/Cellar/sora/0.0.1/share/sora/shell/hook.bash"\n'
+} > "$HOME/.bashrc"
+out=$("$SORA_BIN" hook install bash)
+assert_contains "$out" "refreshing stale hook path" "repair path is reported"
+assert_eq "$(grep -c 'sora: resolve distrobox commands' "$HOME/.bashrc")" 1 \
+    "repair leaves exactly one sora block"
+grep -q '/gone/Cellar' "$HOME/.bashrc" && fail "repair must remove the dead path"
+out=$(bash --norc -c "source $HOME/.bashrc; declare -f command_not_found_handle >/dev/null && echo hooked")
+assert_contains "$out" "hooked" "repaired rc loads the hook"
+
+# --- doctor flags dangling PATH entries shadowing indexed commands ----------
+DANGLE="$SANDBOX/danglebin"
+mkdir -p "$DANGLE"
+ln -s /nonexistent-target "$DANGLE/python"
+out=$(PATH="$DANGLE:$PATH" "$SORA_BIN" doctor 2>&1 || true)
+assert_contains "$out" "dangling symlink $DANGLE/python" \
+    "doctor flags a dangling symlink shadowing an indexed command"
+
+# --- sync is an alias of reindex --------------------------------------------
+out=$("$SORA_BIN" sync 2>&1 || true)
+assert_not_contains "$out" "unknown command" "sora sync is accepted as an alias"
+
 echo "ok: cli"

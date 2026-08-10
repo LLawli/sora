@@ -571,7 +571,7 @@ EOF
 
     count=$(wc -l < "$LISTS_DIR/$name.list" 2>/dev/null || echo 0)
     info "box '$name' is ready: $count commands indexed"
-    if ! grep -qs 'sora/shell/hook' "${ZDOTDIR:-$HOME}/.zshrc" "$HOME/.bashrc" 2>/dev/null &&
+    if ! grep -qs 'sora: resolve distrobox commands' "${ZDOTDIR:-$HOME}/.zshrc" "$HOME/.bashrc" 2>/dev/null &&
        [ ! -f "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/zz-sora.fish" ]; then
         info "next step: 'sora hook install' to enable late resolution in your shell"
     fi
@@ -907,11 +907,15 @@ hook_rc_target() { # bash|zsh|fish
 }
 
 hook_installed() { # bash|zsh|fish
+    # Detection greps for the marker COMMENT, never for the hook's path: the
+    # path only contains "sora" when the checkout/prefix happens to be named
+    # that way, and a path-based check made repeated installs append
+    # duplicate lines from neutrally-named checkouts.
     local rc
     rc=$(hook_rc_target "$1")
     case $1 in
         fish) [ -f "$rc" ] ;;
-        *)    grep -qs 'sora/shell/hook' "$rc" ;;
+        *)    grep -qs 'sora: resolve distrobox commands' "$rc" ;;
     esac
 }
 

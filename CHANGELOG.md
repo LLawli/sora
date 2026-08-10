@@ -9,6 +9,16 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ## [Unreleased]
 
+### Fixed
+
+- Reindex now scans `/usr/games` and `/usr/local/games` — Debian/Ubuntu
+  install `sl`, `cowsay`, `fortune` and friends there, which left a blind
+  spot in apt boxes.
+- `sora hook install` idempotency no longer depends on the checkout path
+  containing the string "sora": detection now greps for the marker comment,
+  so installs from neutrally-named checkouts no longer append duplicate
+  lines to rc files.
+
 ## [0.1.0] - 2026-08-10
 
 ### Added

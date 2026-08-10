@@ -48,12 +48,25 @@ assert_contains "$out" "host binaries always win" "which explains precedence"
 touch "$HOME/.bashrc"
 "$SORA_BIN" hook install bash >/dev/null || fail "hook install failed"
 "$SORA_BIN" hook install bash >/dev/null || fail "second hook install failed"
-assert_eq "$(grep -c 'sora/shell/hook' "$HOME/.bashrc")" 1 "hook install is idempotent"
+assert_eq "$(grep -c 'sora: resolve distrobox commands' "$HOME/.bashrc")" 1 \
+    "hook install is idempotent"
 out=$("$SORA_BIN" hook status)
 assert_contains "$out" "bash  installed" "hook status reports bash"
 
 # The installed line must actually work.
 out=$(bash --norc -c "source $HOME/.bashrc; declare -f command_not_found_handle >/dev/null && echo hooked")
 assert_contains "$out" "hooked" "sourcing .bashrc defines the handler"
+
+# Regression: idempotency must not depend on the checkout path containing the
+# string "sora" (detection is by marker comment, not by hook path). Simulate
+# a neutrally-named clone and install twice from it.
+NEUTRAL="$SANDBOX/upstream-checkout"
+mkdir -p "$NEUTRAL"
+cp -r "$REPO_DIR/bin" "$REPO_DIR/shell" "$REPO_DIR/libexec" "$NEUTRAL/"
+rm -f "$HOME/.bashrc"; touch "$HOME/.bashrc"
+"$NEUTRAL/bin/sora" hook install bash >/dev/null || fail "neutral-path hook install failed"
+"$NEUTRAL/bin/sora" hook install bash >/dev/null || fail "neutral-path second install failed"
+assert_eq "$(grep -c 'sora: resolve distrobox commands' "$HOME/.bashrc")" 1 \
+    "hook install is idempotent from a checkout not named 'sora'"
 
 echo "ok: cli"

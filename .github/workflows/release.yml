@@ -1,7 +1,7 @@
 # Release — triggered by a version tag (the flow is: bin/release X.Y.Z, then
 # git push origin main vX.Y.Z). Builds nothing (pure shell): the release
-# tarball IS the artifact, and every install path (AUR, COPR, curl|sh,
-# manual download) consumes that same tarball.
+# tarball IS the artifact, and every install path (curl|sh, direct download,
+# mise, the Homebrew tap) consumes that same tarball.
 name: Release
 
 on:
@@ -59,12 +59,14 @@ jobs:
             echo "## Install"
             echo
             echo '```sh'
-            echo "# From the tarball"
+            echo "# Recommended"
+            echo "curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/packaging/install.sh | sh"
+            echo
+            echo "# Or grab the tarball directly"
             echo "curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/sora-$VERSION.tar.gz | tar xz"
-            echo "make -C sora-$VERSION install PREFIX=~/.local"
             echo '```'
             echo
-            echo "See the [README](https://github.com/${GITHUB_REPOSITORY}#installation) for COPR, AUR and other paths."
+            echo "Also available via \`mise use -g github:${GITHUB_REPOSITORY}\` and \`brew install LLawli/tap/sora\`."
             echo
             echo "## Checksums"
             echo
@@ -81,7 +83,60 @@ jobs:
             sora-*.tar.gz
             sora-*.tar.gz.sha256
 
-      # TODO once the AUR package exists: publish with
-      # KSXGitHub/github-actions-deploy-aur, injecting the tarball sha256 into
-      # packaging/PKGBUILD (see docs/releasing.md). COPR builds pull the spec
-      # from the tag via its webhook — no job needed here.
+  # Bump the Homebrew tap formula to point at the fresh tarball — same
+  # "one artifact, many wrappers" idea: the formula consumes the release
+  # tarball published above. Needs a TAP_GITHUB_TOKEN secret (PAT with push
+  # access to LLawli/homebrew-tap); the job no-ops politely without it.
+  bump-tap:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for tap token
+        id: token
+        env:
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          if [ -n "$TAP_GITHUB_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "TAP_GITHUB_TOKEN not set; skipping tap bump" >&2
+          fi
+
+      - name: Checkout tap
+        if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: LLawli/homebrew-tap
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+
+      - name: Update formula
+        if: steps.token.outputs.present == 'true'
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/sora-$VERSION.tar.gz"
+          curl -fsSL -o sora.tar.gz "$URL"
+          SHA=$(sha256sum sora.tar.gz | awk '{print $1}')
+          rm sora.tar.gz
+          cat > Formula/sora.rb <<EOF
+          class Sora < Formula
+            desc "Distrobox commands as if they were native host commands"
+            homepage "https://github.com/${GITHUB_REPOSITORY}"
+            url "$URL"
+            sha256 "$SHA"
+            license "MIT"
+
+            def install
+              system "make", "install", "PREFIX=#{prefix}"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/sora version")
+            end
+          end
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/sora.rb
+          git commit -m "sora v$VERSION"
+          git push

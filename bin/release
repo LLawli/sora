@@ -31,8 +31,6 @@ grep -q "^## \[Unreleased\]" CHANGELOG.md ||
 
 echo "==> Bumping version to $VERSION ..."
 sed -i "s/^SORA_VERSION=.*/SORA_VERSION=\"$VERSION\"/" bin/sora
-sed -i "s/^Version:.*/Version:        $VERSION/" packaging/sora.spec
-sed -i "s/^pkgver=.*/pkgver=$VERSION/" packaging/PKGBUILD
 
 echo "==> Rolling CHANGELOG ..."
 TODAY=$(date -u +%Y-%m-%d)
@@ -50,7 +48,7 @@ echo "==> Running the test suite ..."
 bash tests/run.sh
 
 echo "==> Committing and tagging ..."
-git add bin/sora packaging/sora.spec packaging/PKGBUILD CHANGELOG.md
+git add bin/sora CHANGELOG.md
 git commit -m "release: v$VERSION"
 git tag "v$VERSION"
 

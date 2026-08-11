@@ -201,3 +201,20 @@ if [ -d "$__sora_comp_dir" ]; then
     complete -D "${__sora_prev_dopts[@]}" -F __sora_completion_loader
 fi
 
+# ---------------------------------------------------------------------------
+# Live delegation (strategy B), opt-in per command
+#
+# 'sora completion delegate <cmd> --box <box>' records the command here.
+# bash passes the line to an external command through COMP_LINE/COMP_POINT and
+# turns each printed line into a candidate, so 'sora _complete' can ask the
+# box itself. Reading this file costs one small read at shell startup, and it
+# does not exist at all until someone opts in.
+# ---------------------------------------------------------------------------
+
+if [ -r "${XDG_CONFIG_HOME:-$HOME/.config}/sora/delegate.list" ]; then
+    while IFS=$'\t' read -r __sora_dc __sora_db; do
+        [ -n "$__sora_dc" ] && [ -n "$__sora_db" ] || continue
+        complete -C "sora _complete $__sora_db" "$__sora_dc"
+    done < "${XDG_CONFIG_HOME:-$HOME/.config}/sora/delegate.list"
+    unset __sora_dc __sora_db
+fi

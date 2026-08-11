@@ -9,6 +9,48 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ## [Unreleased]
 
+### Added
+
+- **Tab completion for box commands**, in two halves. Completing the command
+  *name* (`kubect<Tab>`) now merges the index into the shell's own candidates:
+  `complete -I` on bash 5.0+, an extended `-command-` context on zsh. It is the
+  same single awk pass a miss costs (measured at 6-16ms), so completing a name
+  never touches a container.
+- Completing *arguments* is covered by three complementary mechanisms:
+  - `sora reindex` syncs each box's own completion scripts to the host, one
+    winner per command using the same priority and pin rules as the index, so a
+    pinned command can never dispatch to one box while completing from another.
+    Static scripts cost nothing per Tab.
+  - `sora anxious <cmd> --box <box> --with-completion` installs the completion
+    script a cobra/clap/click tool generates for itself.
+  - `sora completion delegate <cmd> --box <box>` opts one command in to live
+    completion answered by the running box (~300ms per Tab). A Tab never wakes
+    a stopped box; it returns nothing instead of freezing the terminal.
+- `sora completion status | list | remove` to inspect and undo the above.
+
+### Changed
+
+- The command-not-found hook stays quiet while a completion is running.
+  Completion scripts shell out to the command on every Tab, and distrobox's
+  setup banner would otherwise land on the line being typed. Candidates were
+  never affected (`$( )` captures stdout, the banner is stderr); this fixes the
+  cosmetic half only, and only while completing.
+
+### Fixed
+
+- Installing with `PREFIX=$HOME/.local`, which is what the recommended
+  installer does, made the share dir and the data dir the same directory, so
+  `install(1)` was asked to copy `sora-merge-index` onto itself and printed
+  "are the same file" on every invocation.
+
+### Known limitations
+
+- fish support is reduced and cannot be fixed from sora's side: inside a
+  command substitution fish discards an unknown command's output even when
+  `fish_command_not_found` ran successfully, so completions that shell out
+  yield nothing there. Static synced completions work; `sora anxious
+  --with-completion` is the way to get the dynamic half in fish.
+
 ## [0.1.3] - 2026-08-10
 
 ### Fixed

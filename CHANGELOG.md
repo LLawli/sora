@@ -9,6 +9,8 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-11
+
 ### Added
 
 - The `sora` CLI now completes itself, in bash, zsh and fish: subcommands and

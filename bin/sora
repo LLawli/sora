@@ -886,6 +886,90 @@ anxious_list() {
     fi
 }
 
+# Where each shell looks for a user-installed completion script for <cmd>.
+# bash finds it lazily on the first Tab (no shell restart needed); zsh needs
+# the directory in $fpath; fish scans its completions dir automatically.
+completion_target() { # shell cmd
+    case $1 in
+        bash) printf '%s/bash-completion/completions/%s\n' "${XDG_DATA_HOME:-$HOME/.local/share}" "$2" ;;
+        zsh)  printf '%s/zsh/site-functions/_%s\n' "${XDG_DATA_HOME:-$HOME/.local/share}" "$2" ;;
+        fish) printf '%s/fish/completions/%s.fish\n' "${XDG_CONFIG_HOME:-$HOME/.config}" "$2" ;;
+    esac
+}
+
+# A tool may well have a 'completion' subcommand that means something else
+# entirely, so never trust exit status alone: the output has to look like a
+# completion script for THIS shell before it lands in the user's home.
+#
+# The per-shell patterns must not overlap. A plain "starts with complete"
+# check is NOT enough: plenty of tools ignore the shell argument and print
+# their bash script for every shell, and 'complete -F _t t' would then sail
+# through the fish check and install a bash script as fish completion.
+# COMPREPLY is the reliable bash/fish discriminator — fish has no such array.
+completion_looks_valid() { # shell file
+    case $1 in
+        bash) grep -qE 'COMPREPLY|(^|[[:space:]])complete[[:space:]].*-[FCo][[:space:]]' "$2" ;;
+        zsh)  grep -qE '#compdef|(^|[[:space:]])compdef[[:space:]]' "$2" ;;
+        fish) grep -qE '(^|[[:space:]])complete[[:space:]].*-c[[:space:]]' "$2" &&
+              ! grep -q 'COMPREPLY' "$2" ;;
+    esac
+}
+
+zsh_fpath_has() { # dir
+    zsh -c 'print -l $fpath' 2>/dev/null | grep -qxF "$1"
+}
+
+# Generate and install completion scripts for an anxious-exported command.
+#
+# Modern CLIs (cobra, clap, click) ship a generator: 'cmd completion bash'
+# prints a script whose only dynamic part is a shell-out back to the command
+# itself. Because the anxious wrapper IS a real file in PATH, that shell-out
+# resolves like any host binary — so one script, generated once from inside
+# the box, buys full dynamic completion on the host with no per-Tab machinery
+# of sora's own. This is why it is tied to 'anxious' and not to late
+# resolution: late resolution has no wrapper for the script to call.
+anxious_install_completions() { # cmd box
+    local cmd=$1 box=$2 shell target tmp dir installed=0
+    for shell in bash zsh fish; do
+        command -v "$shell" >/dev/null 2>&1 || continue
+        tmp=$(mktemp)
+        if ! distrobox enter --name "$box" -- "$cmd" completion "$shell" >"$tmp" 2>/dev/null ||
+           [ ! -s "$tmp" ] || ! completion_looks_valid "$shell" "$tmp"; then
+            rm -f "$tmp"
+            continue
+        fi
+        target=$(completion_target "$shell" "$cmd")
+        dir=$(dirname "$target")
+        mkdir -p "$dir"
+        chmod 0644 "$tmp"
+        mv -f "$tmp" "$target"
+        info "$shell: completion installed ($target)"
+        installed=$((installed + 1))
+        if [ "$shell" = zsh ] && ! zsh_fpath_has "$dir"; then
+            warn "$dir is not in your zsh \$fpath; add this to ~/.zshrc BEFORE compinit:"
+            warn "  fpath=($dir \$fpath)"
+        fi
+    done
+    if [ "$installed" = 0 ]; then
+        warn "'$cmd' does not generate completion scripts ('$cmd completion <shell>' failed)"
+        warn "this is normal for tools not built with cobra/clap/click"
+        return 1
+    fi
+    info "open a new shell (bash picks it up on the next Tab)"
+}
+
+anxious_remove_completions() { # cmd
+    local cmd=$1 shell target removed=0
+    for shell in bash zsh fish; do
+        target=$(completion_target "$shell" "$cmd")
+        [ -f "$target" ] || continue
+        rm -f "$target"
+        removed=$((removed + 1))
+    done
+    [ "$removed" -gt 0 ] && info "removed $removed completion script(s) for '$cmd'"
+    return 0
+}
+
 anxious_remove() {
     local cmd=$1 line box binpath wrapper
     [ -f "$ANXIOUS_REG" ] || die "'$cmd' is not exported"
@@ -903,16 +987,20 @@ anxious_remove() {
     [ -e "$wrapper" ] && rm -f "$wrapper"
     awk -F'\t' -v c="$cmd" '$1 != c' "$ANXIOUS_REG" > "$ANXIOUS_REG.tmp" &&
         mv "$ANXIOUS_REG.tmp" "$ANXIOUS_REG"
+    # Paths are derived, not recorded: keeping them out of the registry keeps
+    # the on-disk format compatible with wrappers exported by older versions.
+    anxious_remove_completions "$cmd"
     info "removed exported wrapper for '$cmd'"
 }
 
 cmd_anxious() {
-    local cmd='' box='' use_sudo=0 mode=add binpath sudoflag
+    local cmd='' box='' use_sudo=0 mode=add with_completion=0 binpath sudoflag
     while [ $# -gt 0 ]; do
         case $1 in
             --list|-l)         mode=list ;;
             --remove|-r)       mode=remove; [ $# -ge 2 ] && { cmd=$2; shift; } ;;
             --sudo)            use_sudo=1 ;;
+            --with-completion) with_completion=1 ;;
             --box|-b)          box=${2:?--box needs a value}; shift ;;
             -*)                die "unknown option for 'anxious': $1" ;;
             *)                 [ -z "$cmd" ] && cmd=$1 || die "unexpected argument: $1" ;;
@@ -964,6 +1052,10 @@ cmd_anxious() {
         *) warn "$EXPORT_PATH is not in your PATH; the wrapper will not be found" ;;
     esac
 
+    # After the wrapper exists, not before: the generated script calls the
+    # command by name, so it is only useful once that name resolves on the host.
+    [ "$with_completion" = 1 ] && anxious_install_completions "$cmd" "$box"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -1242,7 +1334,9 @@ Index (late resolution)
   sora which <command>             how a command would resolve (host vs box)
 
 Eager export
-  sora anxious [--sudo] <command> --box <box>
+  sora anxious [--sudo] [--with-completion] <command> --box <box>
+                                   --with-completion also installs the tool's
+                                   own shell completion (cobra/clap/click)
   sora anxious --list
   sora anxious --remove <command>
 

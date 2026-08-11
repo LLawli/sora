@@ -1,16 +1,21 @@
 #!/bin/sh
 # sora-merge-index — merge per-box command lists into the resolved index.
 #
-# Usage: sora-merge-index CONFIG_DIR CACHE_DIR
+# Usage: sora-merge-index CONFIG_DIR CACHE_DIR [DATA_DIR]
 #
 # Reads:
 #   CACHE_DIR/index.d/<box>.list   one command name per line, written by the
 #                                  in-box reindex script
 #   CONFIG_DIR/boxes/<box>.toml    box metadata (only `priority` is used here)
 #   CONFIG_DIR/pins                TSV: command<TAB>box, manual overrides
+#   CACHE_DIR/completions.d/<box>/{bash,zsh,fish}/
+#                                  completion scripts copied out of each box
 #
 # Writes (atomically):
 #   CACHE_DIR/index                TSV: command<TAB>box, one winner per command
+#   DATA_DIR/completions/{bash,zsh,fish}/
+#                                  the winning box's completion script for each
+#                                  command (only when DATA_DIR is given)
 #
 # Tie-break rules, in order:
 #   1. a pin wins, but only if the pinned box actually provides the command
@@ -24,8 +29,11 @@
 
 set -eu
 
-CONFIG_DIR="${1:?usage: sora-merge-index CONFIG_DIR CACHE_DIR}"
-CACHE_DIR="${2:?usage: sora-merge-index CONFIG_DIR CACHE_DIR}"
+CONFIG_DIR="${1:?usage: sora-merge-index CONFIG_DIR CACHE_DIR [DATA_DIR]}"
+CACHE_DIR="${2:?usage: sora-merge-index CONFIG_DIR CACHE_DIR [DATA_DIR]}"
+# Optional so that older generated in-box scripts, which call this with two
+# arguments, keep working after an upgrade.
+DATA_DIR="${3:-}"
 
 LISTS_DIR="$CACHE_DIR/index.d"
 INDEX="$CACHE_DIR/index"
@@ -74,3 +82,68 @@ tmp="$CACHE_DIR/.index.tmp"
 ' > "$tmp"
 
 mv -f "$tmp" "$INDEX"
+
+# ---------------------------------------------------------------------------
+# Completion scripts: same winner, same rules.
+#
+# Resolving completions off the finished index (instead of running the
+# priority/pin logic a second time) means a pinned command can never end up
+# dispatching to one box while completing from another.
+# ---------------------------------------------------------------------------
+
+[ -n "$DATA_DIR" ] || exit 0
+COMP_SRC="$CACHE_DIR/completions.d"
+COMP_DST="$DATA_DIR/completions"
+[ -d "$COMP_SRC" ] || exit 0
+
+staging="$COMP_DST/.staging.$$"
+rm -rf "$staging"
+mkdir -p "$staging"
+
+{
+    for boxdir in "$COMP_SRC"/*/; do
+        [ -d "$boxdir" ] || continue
+        box=${boxdir%/}
+        box=${box##*/}
+        for kind in bash zsh fish; do
+            [ -d "$boxdir$kind" ] || continue
+            for f in "$boxdir$kind"/*; do
+                [ -f "$f" ] || continue
+                base=${f##*/}
+                case $kind in
+                    zsh)  cmd=${base#_} ;;
+                    fish) cmd=${base%.fish} ;;
+                    *)    cmd=$base ;;
+                esac
+                printf '%s\t%s\t%s\t%s\n' "$cmd" "$box" "$kind" "$f"
+            done
+        done
+    done
+} | awk -F'\t' -v OFS='\t' -v idx="$INDEX" '
+    BEGIN { while ((getline l < idx) > 0) { split(l, a, "\t"); win[a[1]] = a[2] } }
+    ($1 in win) && win[$1] == $2 { print $3, $4, $1 }
+' | while IFS="$TAB" read -r kind src cmd; do
+    mkdir -p "$staging/$kind"
+    case $kind in
+        zsh)  dst="$staging/$kind/_$cmd" ;;
+        fish) dst="$staging/$kind/$cmd.fish" ;;
+        *)    dst="$staging/$kind/$cmd" ;;
+    esac
+    cp "$src" "$dst" 2>/dev/null || true
+done
+
+# Swap each shell's directory in one go. Not a single atomic rename for all
+# three, but each shell only ever reads its own, and a stale read costs at
+# most one Tab.
+for kind in bash zsh fish; do
+    if [ -d "$staging/$kind" ]; then
+        rm -rf "$COMP_DST/.old.$kind"
+        [ -d "$COMP_DST/$kind" ] && mv "$COMP_DST/$kind" "$COMP_DST/.old.$kind"
+        mv "$staging/$kind" "$COMP_DST/$kind"
+        rm -rf "$COMP_DST/.old.$kind"
+    else
+        rm -rf "$COMP_DST/$kind"
+    fi
+done
+rm -rf "$staging"
+exit 0

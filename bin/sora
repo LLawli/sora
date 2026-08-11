@@ -178,6 +178,7 @@ template_reindex() {
 # have its own --home, so nothing here may depend on the runtime environment.
 CACHE_DIR='$SORA_CACHE'
 CONFIG_DIR='$SORA_CONFIG'
+DATA_DIR='$SORA_DATA'
 MERGE='$SORA_DATA/libexec/sora-merge-index'
 EOF
     cat <<'EOF'
@@ -212,7 +213,54 @@ if [ -f "$meta" ]; then
     fi
 fi
 
-[ -x "$MERGE" ] && exec "$MERGE" "$CONFIG_DIR" "$CACHE_DIR"
+# Copy this box's own completion scripts out to the host cache, so the host
+# shell can complete arguments without entering the container on every Tab.
+# Only scripts whose name matches a command this box actually provides are
+# copied: the rest is dead weight, and worse, could advertise completion for
+# a command the box does not even have.
+COMP_TMP="$CACHE_DIR/completions.d/.$BOX.tmp"
+COMP_DST="$CACHE_DIR/completions.d/$BOX"
+rm -rf "$COMP_TMP"
+{
+    for kind in bash zsh fish; do
+        case $kind in
+            bash) dirs='/usr/share/bash-completion/completions /usr/local/share/bash-completion/completions /etc/bash_completion.d' ;;
+            zsh)  dirs='/usr/share/zsh/site-functions /usr/share/zsh/vendor-completions /usr/local/share/zsh/site-functions' ;;
+            fish) dirs='/usr/share/fish/vendor_completions.d /usr/share/fish/completions' ;;
+        esac
+        for d in $dirs; do
+            [ -d "$d" ] || continue
+            for f in "$d"/*; do
+                [ -f "$f" ] || continue
+                base=${f##*/}
+                case $kind in
+                    zsh)  cmd=${base#_} ;;
+                    fish) cmd=${base%.fish} ;;
+                    *)    cmd=$base ;;
+                esac
+                printf '%s\t%s\t%s\n' "$cmd" "$kind" "$f"
+            done
+        done
+    done
+} | awk -F'\t' -v list="$CACHE_DIR/index.d/$BOX.list" '
+    BEGIN { while ((getline l < list) > 0) have[l] = 1 }
+    ($1 in have) { print }
+' | while IFS='	' read -r cmd kind src; do
+    mkdir -p "$COMP_TMP/$kind"
+    case $kind in
+        zsh)  dst="$COMP_TMP/$kind/_$cmd" ;;
+        fish) dst="$COMP_TMP/$kind/$cmd.fish" ;;
+        *)    dst="$COMP_TMP/$kind/$cmd" ;;
+    esac
+    # First source dir wins: they are listed most-specific first.
+    [ -f "$dst" ] || cp "$src" "$dst" 2>/dev/null || true
+done
+rm -rf "$COMP_DST"
+if [ -d "$COMP_TMP" ]; then
+    mv "$COMP_TMP" "$COMP_DST"
+fi
+
+[ -x "$MERGE" ] && exec "$MERGE" "$CONFIG_DIR" "$CACHE_DIR" "$DATA_DIR"
 exit 0
 EOF
 }
@@ -374,7 +422,7 @@ ensure_libexec() {
 
 merge_now() {
     ensure_libexec
-    "$SORA_DATA/libexec/sora-merge-index" "$SORA_CONFIG" "$SORA_CACHE"
+    "$SORA_DATA/libexec/sora-merge-index" "$SORA_CONFIG" "$SORA_CACHE" "$SORA_DATA"
 }
 
 # Emit "cmd \t prio \t box" candidates with pins boosted (shared by
@@ -862,12 +910,12 @@ cmd_anxious() {
     local cmd='' box='' use_sudo=0 mode=add binpath sudoflag
     while [ $# -gt 0 ]; do
         case $1 in
-            --list|-l)   mode=list ;;
-            --remove|-r) mode=remove; [ $# -ge 2 ] && { cmd=$2; shift; } ;;
-            --sudo)      use_sudo=1 ;;
-            --box|-b)    box=${2:?--box needs a value}; shift ;;
-            -*)          die "unknown option for 'anxious': $1" ;;
-            *)           [ -z "$cmd" ] && cmd=$1 || die "unexpected argument: $1" ;;
+            --list|-l)         mode=list ;;
+            --remove|-r)       mode=remove; [ $# -ge 2 ] && { cmd=$2; shift; } ;;
+            --sudo)            use_sudo=1 ;;
+            --box|-b)          box=${2:?--box needs a value}; shift ;;
+            -*)                die "unknown option for 'anxious': $1" ;;
+            *)                 [ -z "$cmd" ] && cmd=$1 || die "unexpected argument: $1" ;;
         esac
         shift
     done
@@ -915,6 +963,7 @@ cmd_anxious() {
         *":$EXPORT_PATH:"*) ;;
         *) warn "$EXPORT_PATH is not in your PATH; the wrapper will not be found" ;;
     esac
+
 }
 
 # ---------------------------------------------------------------------------

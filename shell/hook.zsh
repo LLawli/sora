@@ -112,3 +112,29 @@ if (( ${+_comps} )); then
     compdef _sora_command_names -command-
 fi
 
+# ---------------------------------------------------------------------------
+# Completing ARGUMENTS of a box command
+#
+# 'sora reindex' copies each box's own completion functions to
+# ~/.local/share/sora/completions/zsh, one winner per command. Adding that
+# directory to $fpath is only half the job: this file is meant to be sourced
+# near the END of .zshrc, so compinit has already run and would never look at
+# a newly added entry. Registering each function explicitly is what makes it
+# work without forcing a second compinit (which is slow and can surprise
+# frameworks).
+# ---------------------------------------------------------------------------
+
+() {
+    local dir="${XDG_DATA_HOME:-$HOME/.local/share}/sora/completions/zsh"
+    [[ -d $dir ]] || return 0
+    (( ${fpath[(I)$dir]} )) || fpath=("$dir" $fpath)
+    (( ${+functions[compdef]} )) || return 0
+    local f cmd
+    for f in "$dir"/_*(N); do
+        cmd=${${f:t}#_}
+        # Never shadow a completion the user already has for this command.
+        (( ${+_comps[$cmd]} )) && continue
+        autoload -Uz "${f:t}"
+        compdef "${f:t}" "$cmd"
+    done
+}

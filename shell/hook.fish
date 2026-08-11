@@ -20,6 +20,29 @@ if functions -q fish_command_not_found
     end
 end
 
+# Completion for box commands, as far as fish can go.
+#
+# 'sora reindex' copies each box's own completion files to
+# ~/.local/share/sora/completions/fish; putting that directory on
+# $fish_complete_path is all fish needs to pick them up.
+#
+# The hard limit is fish itself: inside a command substitution it discards the
+# output of an unknown command even when fish_command_not_found runs and
+# prints (bash returns the value there; fish returns nothing). So the STATIC
+# half of a completion file works, and any part that shells out to the command
+# to compute candidates silently yields nothing. Export the command with
+# 'sora anxious' when you need the dynamic half: a real wrapper in PATH is not
+# an unknown command, so nothing gets discarded. See README.
+set -l __sora_comp_dir $HOME/.local/share/sora/completions/fish
+if set -q XDG_DATA_HOME
+    set __sora_comp_dir $XDG_DATA_HOME/sora/completions/fish
+end
+if test -d "$__sora_comp_dir"
+    if not contains -- $__sora_comp_dir $fish_complete_path
+        set -p fish_complete_path $__sora_comp_dir
+    end
+end
+
 function __sora_container_exists
     if command -q podman
         command podman container exists $argv[1] 2>/dev/null; and return 0

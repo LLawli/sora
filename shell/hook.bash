@@ -141,4 +141,63 @@ if [ "${BASH_VERSINFO[0]:-0}" -ge 5 ]; then
     complete -I -F __sora_complete_initial
 fi
 
+# ---------------------------------------------------------------------------
+# Completing ARGUMENTS of a box command
+#
+# 'sora reindex' copies each box's own completion scripts to
+# ~/.local/share/sora/completions/bash, one winner per command, resolved off
+# the same index (so a pinned command never dispatches to one box while
+# completing from another).
+#
+# Those files are NOT dropped into the user's bash-completion directory: that
+# directory belongs to the user, and sora overwriting a name there would be
+# indistinguishable from data loss. Instead we chain bash-completion's dynamic
+# loader, the same capture-once discipline used for the not-found handler.
+#
+# Most of these scripts are static and cost nothing per Tab. The ones that
+# shell out to the command itself go through the dispatch above, which stays
+# quiet while completing.
+# ---------------------------------------------------------------------------
+
+__sora_comp_dir="${XDG_DATA_HOME:-$HOME/.local/share}/sora/completions/bash"
+
+if [ -d "$__sora_comp_dir" ]; then
+    __sora_prev_loader=$(complete -p -D 2>/dev/null |
+        sed -n 's/^complete .*-F \([^ ]*\).*/\1/p')
+    case $__sora_prev_loader in
+        __sora_completion_loader|'') __sora_prev_loader='' ;;
+    esac
+
+    # Carry over the -o options of the loader we are replacing. Real systems
+    # do have them (python-argcomplete registers
+    # '-o bashdefault -o default -F _python_argcomplete_global -D'), and
+    # dropping them silently removes the filename fallback for every command
+    # with no completion of its own.
+    __sora_prev_dopts=()
+    if [ -n "$__sora_prev_loader" ]; then
+        while read -r __sora_o; do
+            [ -n "$__sora_o" ] && __sora_prev_dopts+=(-o "$__sora_o")
+        done < <(complete -p -D 2>/dev/null | grep -o -- '-o [a-z]*' | cut -d' ' -f2)
+        unset __sora_o
+    fi
+
+    __sora_completion_loader() {
+        local f="$__sora_comp_dir/$1"
+        # 124 is the loader protocol: "I registered something, retry".
+        if [ -r "$f" ]; then
+            # shellcheck source=/dev/null
+            . "$f" && return 124
+        fi
+        if [ -n "$__sora_prev_loader" ] &&
+           declare -f "$__sora_prev_loader" >/dev/null 2>&1; then
+            "$__sora_prev_loader" "$@"
+            return $?
+        fi
+        # Nothing of ours and nobody to delegate to: plain failure, so bash
+        # falls back to its default (filename) completion. Returning 124 here
+        # would ask bash to retry a completion that nothing has registered.
+        return 1
+    }
+    complete -D "${__sora_prev_dopts[@]}" -F __sora_completion_loader
+fi
 

@@ -73,4 +73,42 @@ command_not_found_handler() {
     __sora_dispatch "$@"
 }
 
+# ---------------------------------------------------------------------------
+# Completing the command NAME itself
+#
+# The dispatch above only runs after a line is submitted, so it cannot help
+# with 'kubect<Tab>': zsh builds command candidates from PATH, and a command
+# that only lives inside a box is not there.
+#
+# This is a completer rather than a compdef override: it ADDS the indexed
+# names and then deliberately returns non-zero, so every completer configured
+# after it still contributes its own candidates. Cost is one awk pass over a
+# flat TSV — completing a name never touches a container.
+# ---------------------------------------------------------------------------
+
+# Extending the -command- context, rather than adding a completer to the
+# zstyle. A completer was the obvious route and it does NOT work: one that
+# adds candidates and returns non-zero (so the remaining completers still
+# contribute) has its matches thrown away whenever every completer ends up
+# returning non-zero, which is exactly what happens when the name exists only
+# inside a box. Extending -command- keeps both halves: whatever completed
+# command names before us still runs, and ours are appended.
+#
+# Requires compinit to have run already, which is the case when this file is
+# sourced near the end of .zshrc as documented.
+
+if (( ${+_comps} )); then
+    if [[ ${_comps[-command-]:-} != _sora_command_names ]]; then
+        typeset -g __sora_prev_command_comp=${_comps[-command-]:-}
+    fi
+
+    _sora_command_names() {
+        local index="${XDG_CACHE_HOME:-$HOME/.cache}/sora/index"
+        local -a cmds
+        [[ -r $index ]] && cmds=(${(f)"$(awk -F '\t' 'NF { print $1 }' $index)"})
+        [[ -n ${__sora_prev_command_comp:-} ]] && $__sora_prev_command_comp "$@"
+        (( $#cmds )) && compadd -a cmds
+    }
+    compdef _sora_command_names -command-
+fi
 

@@ -87,5 +87,58 @@ command_not_found_handle() {
     __sora_dispatch "$@"
 }
 
+# ---------------------------------------------------------------------------
+# Completing the command NAME itself
+#
+# The dispatch above only ever runs AFTER a full command line is submitted, so
+# it can do nothing for 'kubect<Tab>': bash builds that candidate list from
+# PATH, and a command that only lives inside a box is not there. 'complete -I'
+# (bash 5.0+) hooks the INITIAL word of a line, which is exactly the gap.
+#
+# Cost is the same single awk pass over a flat TSV that a miss costs, so this
+# keeps the project invariant intact: completing a name NEVER touches a
+# container. Only the argument completion of an actual box command does.
+# ---------------------------------------------------------------------------
+
+if [ "${BASH_VERSINFO[0]:-0}" -ge 5 ]; then
+    # Chain to a pre-existing initial-word completion the same way we chain to
+    # a pre-existing not-found handler: capture once, never capture ourselves.
+    # Only the '-F function' form can be chained; a '-C command' one is left
+    # alone (overwriting it would silently break whatever installed it).
+    # 'complete -p -I' prints it as 'complete -F <func> -I', so match on -F
+    # and not on argument order.
+    __sora_prev_initial=$(complete -p -I 2>/dev/null |
+        sed -n 's/^complete .*-F \([^ ]*\).*/\1/p')
+    case $__sora_prev_initial in
+        __sora_complete_initial|'') __sora_prev_initial='' ;;
+    esac
+
+    __sora_complete_initial() {
+        local cur index prev=()
+        cur=${COMP_WORDS[COMP_CWORD]}
+        index="${XDG_CACHE_HOME:-$HOME/.cache}/sora/index"
+
+        if [ -n "$__sora_prev_initial" ] &&
+           declare -f "$__sora_prev_initial" >/dev/null 2>&1; then
+            COMPREPLY=()
+            "$__sora_prev_initial" "$@"
+            prev=("${COMPREPLY[@]}")
+        fi
+
+        # compgen -c reproduces bash's own list (PATH, aliases, functions,
+        # builtins, keywords); the awk pass adds the boxes. sort -u because a
+        # command can legitimately exist both on the host and in a box, and a
+        # duplicated candidate would be shown twice.
+        mapfile -t COMPREPLY < <(
+            {
+                [ ${#prev[@]} -gt 0 ] && printf '%s\n' "${prev[@]}"
+                compgen -c -- "$cur"
+                [ -r "$index" ] && awk -F '\t' -v p="$cur" \
+                    'substr($1, 1, length(p)) == p { print $1 }' "$index"
+            } | sort -u
+        )
+    }
+    complete -I -F __sora_complete_initial
+fi
 
 

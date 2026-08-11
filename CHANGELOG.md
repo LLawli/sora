@@ -9,6 +9,19 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ## [Unreleased]
 
+### Added
+
+- The `sora` CLI now completes itself, in bash, zsh and fish: subcommands and
+  their subcommands, flags, box names for `--box` and `box enter|rm|
+  set-priority`, indexed commands for `which`, `pin` and `completion delegate`,
+  exported commands for `anxious --remove`, delegated ones for `completion
+  remove`, and the image alias catalog for `--image`. v0.2.0 taught sora to
+  complete the commands inside boxes but left its own CLI without completion.
+  Candidates come only from local files, so completing a sora command never
+  enters a container. Installed to each shell's standard directory by `make
+  install` and by `packaging/install.sh`; Homebrew links those three
+  directories itself, so a brew install needs no extra step.
+
 ## [0.2.0] - 2026-08-11
 
 ### Added

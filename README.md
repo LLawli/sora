@@ -159,7 +159,14 @@ not apply.
 
 ### Tab completion
 
-Completion splits into two problems, and sora treats them separately.
+The `sora` command completes itself out of the box — subcommands, flags, box
+names for `--box`, indexed commands for `which` and `pin`, exported commands
+for `anxious --remove`. It is installed to each shell's standard location by
+`make install` and by the installer, and reads only local files, so completing
+a sora command never enters a container either.
+
+For the commands *inside* your boxes, completion splits into two problems, and
+sora treats them separately.
 
 **The command name** (`kubect<Tab>`). Your shell builds that list from PATH, so
 a command that only lives in a box is never in it. sora merges the index into

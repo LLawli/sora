@@ -160,7 +160,14 @@ tardia não vale.
 
 ### Tab completion
 
-Completion são dois problemas distintos, e o sora trata cada um do seu jeito.
+O próprio comando `sora` se completa desde a instalação: subcomandos, flags,
+nomes de box no `--box`, comandos indexados no `which` e no `pin`, comandos
+exportados no `anxious --remove`. Vai para o diretório padrão de cada shell
+pelo `make install` e pelo installer, e lê só arquivos locais, então completar
+um comando do sora também nunca entra em container.
+
+Para os comandos *dentro* das boxes, completion são dois problemas distintos, e
+o sora trata cada um do seu jeito.
 
 **O nome do comando** (`kubect<Tab>`). O shell monta essa lista a partir do
 PATH, então um comando que só existe dentro de uma box nunca aparece. O sora

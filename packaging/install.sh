@@ -56,6 +56,13 @@ install -D -m 0644 "$SRC/shell/hook.bash" "$PREFIX/share/sora/shell/hook.bash"
 install -D -m 0644 "$SRC/shell/hook.zsh" "$PREFIX/share/sora/shell/hook.zsh"
 install -D -m 0644 "$SRC/shell/hook.fish" "$PREFIX/share/sora/shell/hook.fish"
 install -D -m 0755 "$SRC/libexec/sora-merge-index" "$PREFIX/share/sora/libexec/sora-merge-index"
+# Completion for the sora CLI itself, in each shell's standard location.
+install -D -m 0644 "$SRC/shell/completion.bash" \
+    "$PREFIX/share/bash-completion/completions/sora"
+install -D -m 0644 "$SRC/shell/completion.zsh" \
+    "$PREFIX/share/zsh/site-functions/_sora"
+install -D -m 0644 "$SRC/shell/completion.fish" \
+    "$PREFIX/share/fish/vendor_completions.d/sora.fish"
 
 case ":${PATH}:" in
     *":$PREFIX/bin:"*) ;;

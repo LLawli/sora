@@ -74,7 +74,7 @@ other's territory:
 | | Late resolution | Eager export |
 |---|---|---|
 | Works in | interactive shells with the hook installed | anything: scripts, `.desktop`, cron, other shells |
-| Tab completion | no | yes (it is a file in PATH) |
+| Tab completion | yes, see below (bash and zsh; fish reduced) | yes, plus the tool's own generator |
 | Coverage | every binary in every box, automatically | one command at a time, explicitly |
 | PATH pollution | none | one file per exported command |
 | Host precedence | structural (hook fires only after PATH misses) | depends on PATH order |
@@ -157,6 +157,57 @@ Package managers are the flagship use case for eager mode precisely because
 they get invoked from scripts and other contexts where late resolution does
 not apply.
 
+### Tab completion
+
+Completion splits into two problems, and sora treats them separately.
+
+**The command name** (`kubect<Tab>`). Your shell builds that list from PATH, so
+a command that only lives in a box is never in it. sora merges the index into
+the candidates: `complete -I` in bash, an extra completer in zsh. This is one
+awk pass over a flat file, so **completing a name never touches a container**,
+exactly like a miss. Nothing to configure; it comes with the hook.
+
+**The arguments** (`apt-get inst<Tab>`). Four mechanisms, complementary rather
+than competing, because their coverage does not overlap:
+
+| | What it covers | Cost per Tab | Setup |
+|---|---|---|---|
+| Synced scripts | software that ships a completion script (most of a distro) | none for static scripts | automatic on `sora reindex` |
+| The tool's own generator | cobra / clap / click tools | ~300 ms | `sora anxious <cmd> --box <box> --with-completion` |
+| Live delegation | anything, with the box's live state | ~300 ms, always | `sora completion delegate <cmd> --box <box>` |
+| carapace-bin | ~1600 known tools | ~300 ms | install carapace; no sora config needed |
+
+```console
+$ sora completion status                              # what is wired up
+$ sora completion delegate systemctl --box archbox    # opt in to live completion
+$ sora completion list | remove <command>
+```
+
+`sora reindex` copies each box's completion scripts to
+`~/.local/share/sora/completions/`, picking one winner per command with the
+same priority and pin rules as the index, so a pinned command can never
+dispatch to one box while completing from another. Nothing is ever written
+into your own `bash-completion` directory: sora chains bash-completion's
+dynamic loader instead, so it cannot overwrite a file you put there.
+
+Live delegation is opt-in per command because it enters the container on
+**every** Tab. While the box is stopped those Tabs return nothing rather than
+freezing your terminal for three seconds to wake it.
+
+[carapace-bin](https://carapace-sh.github.io/carapace-bin/) needs no support
+code: its specs describe the tool rather than its path, so the shell-outs land
+on sora's wrapper or hook like any other command.
+
+**fish support is reduced, and it is not fixable from sora's side.** Inside a
+command substitution, fish discards the output of an unknown command even when
+`fish_command_not_found` runs and prints successfully (bash returns the value
+there; fish returns nothing). So for a late-resolved command, the *static* half
+of a synced completion works, and anything that shells out to compute
+candidates silently yields nothing. Live delegation and completing the command
+name are bash and zsh only. What does work in fish: export the command with
+`sora anxious --with-completion`. A wrapper is a real file in PATH, not an
+unknown command, so nothing is discarded.
+
 ### Shell hooks
 
 ```console
@@ -181,6 +232,12 @@ empty strings) reach the box intact; exit codes propagate.
 - fish forces the *reported* exit status of an unknown command to 127 even
   when the handler ran it successfully; the command runs and prints normally,
   only `$status` lies. bash and zsh propagate correctly.
+- The same fish behaviour, one level deeper, is what caps tab completion
+  there: inside a command substitution fish throws away an unknown command's
+  output entirely, so completions that shell out get nothing. See the tab
+  completion section; `sora anxious --with-completion` is the way around it.
+- Completing a command *name* needs bash 5.0+ (`complete -I`). On bash 4 the
+  hook still resolves commands; only the name completion is skipped.
 - Argument fidelity through `distrobox enter` is as good as your distrobox
   version; sora passes `"$@"` untouched to it.
 - In fish, sora installs to `conf.d`, which loads *before* `config.fish`; if

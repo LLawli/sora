@@ -74,7 +74,7 @@ território do outro:
 | | Resolução tardia | Exportação ansiosa |
 |---|---|---|
 | Contextos que funcionam | só shells interativos com o gancho instalado | qualquer um: scripts, `.desktop`, cron, outro shell |
-| Tab completion | não | sim (é arquivo no PATH) |
+| Tab completion | sim, veja abaixo (bash e zsh; fish reduzido) | sim, mais o gerador da própria ferramenta |
 | Cobertura | todos os binários da box, automático | um comando por vez, explícito |
 | Poluição do PATH | nenhuma | um arquivo por comando exportado |
 | Precedência do host | estrutural (gancho só dispara após o PATH falhar) | depende da ordem do PATH |
@@ -158,6 +158,59 @@ Gerenciadores de pacotes são o caso de uso principal do modo ansioso
 justamente porque são invocados de scripts e de contextos onde a resolução
 tardia não vale.
 
+### Tab completion
+
+Completion são dois problemas distintos, e o sora trata cada um do seu jeito.
+
+**O nome do comando** (`kubect<Tab>`). O shell monta essa lista a partir do
+PATH, então um comando que só existe dentro de uma box nunca aparece. O sora
+mescla o índice aos candidatos: `complete -I` no bash, um completer extra no
+zsh. É uma passada de awk sobre um arquivo plano, ou seja, **completar um nome
+nunca toca em container**, igual a um miss. Não precisa configurar nada, vem
+junto com o gancho.
+
+**Os argumentos** (`apt-get inst<Tab>`). Quatro mecanismos, complementares e
+não concorrentes, porque a cobertura de cada um é diferente:
+
+| | O que cobre | Custo por Tab | Configuração |
+|---|---|---|---|
+| Scripts sincronizados | software que já traz script de completion (a maior parte de uma distro) | zero, para scripts estáticos | automático no `sora reindex` |
+| Gerador da própria ferramenta | ferramentas cobra / clap / click | ~300 ms | `sora anxious <cmd> --box <box> --with-completion` |
+| Delegação viva | qualquer coisa, com o estado vivo da box | ~300 ms, sempre | `sora completion delegate <cmd> --box <box>` |
+| carapace-bin | ~1600 ferramentas conhecidas | ~300 ms | instalar o carapace; sem configuração no sora |
+
+```console
+$ sora completion status                              # o que está ligado
+$ sora completion delegate systemctl --box archbox    # opt-in de completion viva
+$ sora completion list | remove <comando>
+```
+
+O `sora reindex` copia os scripts de completion de cada box para
+`~/.local/share/sora/completions/`, elegendo um vencedor por comando com as
+mesmas regras de prioridade e pins do índice. Assim um comando pinado nunca
+despacha para uma box e completa a partir de outra. Nada é escrito no seu
+diretório do `bash-completion`: o sora encadeia o loader dinâmico do
+bash-completion, então não tem como sobrescrever um arquivo seu.
+
+A delegação viva é opt-in por comando porque entra no container a **cada**
+Tab. Com a box parada, esses Tabs não devolvem nada, em vez de congelar o
+terminal por três segundos para acordá-la.
+
+O [carapace-bin](https://carapace-sh.github.io/carapace-bin/) não precisa de
+código de suporte: as specs dele descrevem a ferramenta, não o caminho dela,
+então os shell-outs caem no wrapper ou no gancho do sora como qualquer comando.
+
+**O suporte do fish é reduzido, e isso não tem conserto do lado do sora.**
+Dentro de uma substituição de comando, o fish descarta a saída de um comando
+desconhecido mesmo quando o `fish_command_not_found` roda e imprime com
+sucesso (o bash devolve o valor ali; o fish não devolve nada). Então, para um
+comando de resolução tardia, a metade *estática* de uma completion
+sincronizada funciona, e tudo que faz shell-out para calcular candidatos
+devolve vazio silenciosamente. Delegação viva e completion do nome do comando
+são só bash e zsh. O que funciona no fish: exportar o comando com
+`sora anxious --with-completion`. Um wrapper é um arquivo real no PATH, não um
+comando desconhecido, então nada é descartado.
+
 ### Ganchos de shell
 
 ```console
@@ -182,6 +235,13 @@ o código de saída é propagado.
 - O fish força o status *reportado* de um comando desconhecido para 127 mesmo
   quando o handler o executou com sucesso; o comando roda e imprime
   normalmente, só o `$status` mente. bash e zsh propagam corretamente.
+- O mesmo comportamento do fish, um nível mais fundo, é o que limita o tab
+  completion lá: dentro de uma substituição de comando o fish joga fora a
+  saída inteira de um comando desconhecido, então completions que fazem
+  shell-out não recebem nada. Veja a seção de tab completion;
+  `sora anxious --with-completion` é o caminho para contornar.
+- Completar o *nome* de um comando exige bash 5.0+ (`complete -I`). No bash 4
+  o gancho continua resolvendo comandos; só a completion de nome é pulada.
 - A fidelidade de argumentos através do `distrobox enter` é a da sua versão
   do distrobox; o sora passa `"$@"` intocado.
 - No fish, o sora instala em `conf.d`, que carrega *antes* do `config.fish`;

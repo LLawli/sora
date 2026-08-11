@@ -137,13 +137,13 @@ done
 # most one Tab.
 for kind in bash zsh fish; do
     if [ -d "$staging/$kind" ]; then
-        rm -rf "$COMP_DST/.old.$kind"
+        rm -rf "${COMP_DST:?}/.old.$kind"
         [ -d "$COMP_DST/$kind" ] && mv "$COMP_DST/$kind" "$COMP_DST/.old.$kind"
         mv "$staging/$kind" "$COMP_DST/$kind"
-        rm -rf "$COMP_DST/.old.$kind"
+        rm -rf "${COMP_DST:?}/.old.$kind"
     else
-        rm -rf "$COMP_DST/$kind"
+        rm -rf "${COMP_DST:?}/$kind"
     fi
 done
-rm -rf "$staging"
+rm -rf "${staging:?}"
 exit 0

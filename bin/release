@@ -50,7 +50,10 @@ bash tests/run.sh
 echo "==> Committing and tagging ..."
 git add bin/sora CHANGELOG.md
 git commit -m "release: v$VERSION"
-git tag "v$VERSION"
+# Always annotated, always with a message. A bare 'git tag' becomes an
+# annotated tag under tag.gpgsign=true, and then dies with "no tag message?"
+# the moment no editor can be opened — which is every CI job and every agent.
+git tag -a -m "sora v$VERSION" "v$VERSION"
 
 echo
 echo "Done. Review, then publish with:"

@@ -353,9 +353,17 @@ EOF
 # They live in the HOME on purpose: the home is bind-mounted inside every box
 # at the same absolute path, so in-box hooks can call them directly.
 ensure_libexec() {
-    local d="$SORA_DATA/libexec" tmp
+    local d="$SORA_DATA/libexec" tmp src
     mkdir -p "$d"
-    install -m 0755 "$SORA_SHARE/libexec/sora-merge-index" "$d/sora-merge-index"
+    src="$SORA_SHARE/libexec/sora-merge-index"
+    # Installing with PREFIX=$HOME/.local — what the recommended installer
+    # does — makes SHAREDIR and SORA_DATA the very same directory, so source
+    # and destination are one file and install(1) fails with "are the same
+    # file" on every single command. -ef compares device+inode, so it also
+    # covers the case where one side is a symlink to the other.
+    if ! [ "$src" -ef "$d/sora-merge-index" ]; then
+        install -m 0755 "$src" "$d/sora-merge-index"
+    fi
     for gen in reindex detect-pm which; do
         tmp="$d/.sora-$gen.tmp"
         "template_${gen//-/_}" > "$tmp"

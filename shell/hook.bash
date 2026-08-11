@@ -42,14 +42,27 @@ __sora_lookup() {
     awk -F '\t' -v c="$1" '$1 == c { print $2; exit }' "$index"
 }
 
+# Bash defines COMP_LINE while a completion function runs. Completion scripts
+# routinely shell out to the command itself (every cobra/clap tool does, on
+# every Tab), and for a box command that shell-out lands here. The candidate
+# list is read from STDOUT, which stays clean — but distrobox's setup banner
+# and our own warnings go to STDERR, straight onto the line the user is
+# typing. Nothing we print mid-Tab is actionable, so this path stays quiet.
+__sora_in_completion() { [ -n "${COMP_LINE+x}" ]; }
+
 __sora_dispatch() {
     local cmd=$1 box index
     box=$(__sora_lookup "$cmd")
     if [ -n "$box" ]; then
         if __sora_container_exists "$box"; then
-            distrobox enter --name "$box" -- "$@"
+            if __sora_in_completion; then
+                distrobox enter --name "$box" -- "$@" 2>/dev/null
+            else
+                distrobox enter --name "$box" -- "$@"
+            fi
             return $?
         fi
+        __sora_in_completion && return 127
         printf "sora: '%s' is indexed to box '%s', but that container no longer exists.\n" "$cmd" "$box" >&2
         printf "sora: run 'sora reindex' to refresh the index.\n" >&2
         return 127
@@ -59,6 +72,7 @@ __sora_dispatch() {
         __sora_prev_handle_bash "$@"
         return $?
     fi
+    __sora_in_completion && return 127
     printf 'bash: %s: command not found\n' "$cmd" >&2
     index="${XDG_CACHE_HOME:-$HOME/.cache}/sora/index"
     if [ -s "$index" ]; then
@@ -72,3 +86,6 @@ __sora_dispatch() {
 command_not_found_handle() {
     __sora_dispatch "$@"
 }
+
+
+

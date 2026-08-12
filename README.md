@@ -328,6 +328,10 @@ Implementation detail deliberately lives out of this README:
   (keep-id/subuid permissions, sudo resetting `$HOME`, heredoc quoting…).
 - [docs/decisions.md](docs/decisions.md) — why bash, why not a dedicated
   system user, why not a PATH shim, why not export everything, prior art.
+- [docs/rfc-provide.md](docs/rfc-provide.md) — proposal (not implemented):
+  `sora provide`, registering a box resource at a host integration point
+  (PKCS#11 modules, native-messaging manifests), with two working reference
+  implementations behind it.
 - [docs/releasing.md](docs/releasing.md) — tag-triggered releases,
   `bin/release`.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — what CI enforces.

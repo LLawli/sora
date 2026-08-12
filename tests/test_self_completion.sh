@@ -75,6 +75,22 @@ out=$(complete_bash sora completion remove "")
 assert_contains "$out" "apt-cache" "'completion remove' offers delegated commands"
 assert_not_contains "$out" "htop" "'completion remove' offers only delegated ones"
 
+# --- desktop-entry flags ----------------------------------------------------
+out=$(complete_bash sora anxious --desk)
+assert_contains "$out" "--desktop" "'anxious --desk' completes to --desktop"
+out=$(complete_bash sora anxious --desktop -)
+assert_contains "$out" "--wmclass" "--desktop's own flags are offered"
+assert_contains "$out" "--browser" "--browser is offered"
+assert_contains "$out" "--no-prompt" "--no-prompt is offered"
+out=$(complete_bash sora anxious --desktop --categories "")
+assert_contains "$out" "Network;WebBrowser;" "--categories offers the browser category"
+# Free-form values must offer NOTHING, not the index: a --name that suggested
+# command names would be actively misleading.
+out=$(complete_bash sora anxious --desktop --name "")
+assert_not_contains "$out" "htop" "--name does not fall back to command names"
+out=$(complete_bash sora anxious --desktop --wmclass "")
+assert_not_contains "$out" "htop" "--wmclass does not fall back to command names"
+
 # --- hook -------------------------------------------------------------------
 out=$(complete_bash sora hook "")
 assert_contains "$out" "install" "'sora hook' lists its subcommands"
@@ -131,6 +147,21 @@ if command -v fish >/dev/null 2>&1; then
     assert_contains "$out" "apt-cache" "fish: 'which' offers indexed commands"
     out=$(fish_complete 'sora comp')
     assert_contains "$out" "completion" "fish: subcommand completion"
+
+    # The -x trap again, now for the desktop flags: each of these takes a
+    # value, so none of them may fall through to filenames.
+    out=$(fish_complete 'sora anxious --desktop --name ')
+    assert_not_contains "$out" "CHANGELOG" "fish: --name must not fall back to filenames"
+    out=$(fish_complete 'sora anxious --desktop --wmclass ')
+    assert_not_contains "$out" "CHANGELOG" "fish: --wmclass must not fall back to filenames"
+    out=$(fish_complete 'sora anxious --desktop --icon ')
+    assert_not_contains "$out" "CHANGELOG" "fish: --icon must not fall back to filenames"
+    out=$(fish_complete 'sora anxious --desktop --mime ')
+    assert_not_contains "$out" "CHANGELOG" "fish: --mime must not fall back to filenames"
+    out=$(fish_complete 'sora anxious --desktop --categories ')
+    assert_contains "$out" "Network;WebBrowser;" "fish: --categories offers its values"
+    out=$(fish_complete 'sora anxious --deskt')
+    assert_contains "$out" "--desktop" "fish: --desktop is offered"
 fi
 
 # --- installed to the standard per-shell locations --------------------------

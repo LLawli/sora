@@ -77,7 +77,7 @@ território do outro:
 | Tab completion | sim, veja abaixo (bash e zsh; fish reduzido) | sim, mais o gerador da própria ferramenta |
 | Cobertura | todos os binários da box, automático | um comando por vez, explícito |
 | Poluição do PATH | nenhuma | um arquivo por comando exportado |
-| Precedência do host | estrutural (gancho só dispara após o PATH falhar) | depende da ordem do PATH |
+| Precedência do host | estrutural (gancho só dispara após o PATH falhar) | imposta: export que sombrearia binário do host é recusado |
 
 **Por que não simplesmente exportar tudo?** Uma box tem milhares de binários.
 Exportar todos inunda o PATH e o tab completion, inverte a precedência em
@@ -169,6 +169,21 @@ $ sora anxious --path /opt/lacuna-webpki/webpki --as webpki-lacuna --box adv-br
 
 O `--as` funciona sozinho também, quando o nome que a box dá para algo não é o
 nome que você quer no host.
+
+**Export que sombrearia binário do host é recusado.** "O host sempre vence" é
+*estrutural* na resolução tardia (o gancho só dispara depois que o PATH já
+falhou), mas a exportação ansiosa escreve arquivo de verdade em `~/.local/bin`,
+que costuma vir antes de `/usr/bin`. Então o sora confere antes e para:
+
+```console
+$ sora anxious fd --box archbox
+sora: warning: 'fd' already exists on the host: /usr/bin/fd
+sora: warning: ~/.local/bin usually precedes /usr/bin, so this export would shadow it
+sora: warning: pick another name with --as, or pass --force to shadow it deliberately
+sora: error: refusing to shadow a host binary
+```
+
+A checagem não custa nada e roda antes de qualquer container ser tocado.
 
 ### `sora anxious --desktop` — apps gráficos no menu
 

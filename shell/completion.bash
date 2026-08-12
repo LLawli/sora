@@ -134,7 +134,7 @@ _sora() {
             case $cur in
                 -*) mapfile -t COMPREPLY < <(compgen -W \
                         "--sudo --with-completion --box --list --remove \
-                         --path --as \
+                         --path --as --force \
                          --desktop --name --generic-name --comment --icon \
                          --categories --mime --keywords --wmclass --terminal \
                          --browser --default-browser --detect-wmclass \

@@ -1080,6 +1080,23 @@ anxious_list() {
 # Where each shell looks for a user-installed completion script for <cmd>.
 # bash finds it lazily on the first Tab (no shell restart needed); zsh needs
 # the directory in $fpath; fish scans its completions dir automatically.
+# "Host binaries always win" is STRUCTURAL for late resolution: the hook only
+# ever fires after PATH lookup already failed. Nothing enforced it for eager
+# export, though, and $EXPORT_PATH usually precedes /usr/bin - so exporting a
+# name the host already has silently hijacks it. That is the project's
+# headline claim, so the export refuses rather than warns.
+anxious_host_conflict() { # name -> prints the host path, or fails
+    local p
+    p=$(command -v -- "$1" 2>/dev/null) || return 1
+    # Builtins, keywords and aliases resolve to a bare word rather than a
+    # path, and no file in PATH can shadow them anyway.
+    case $p in /*) ;; *) return 1 ;; esac
+    # Our own wrapper from a previous export is not a conflict: re-running
+    # 'sora anxious htop --box b' has to stay idempotent.
+    [ "$p" = "$EXPORT_PATH/$1" ] && return 1
+    printf '%s\n' "$p"
+}
+
 completion_target() { # shell cmd
     case $1 in
         bash) printf '%s/bash-completion/completions/%s\n' "${XDG_DATA_HOME:-$HOME/.local/share}" "$2" ;;
@@ -1557,7 +1574,7 @@ anxious_remove() {
 
 cmd_anxious() {
     local cmd='' box='' use_sudo=0 mode=add with_completion=0 binpath sudoflag
-    local with_desktop=0 path_flag='' as_name='' lookup base
+    local with_desktop=0 path_flag='' as_name='' lookup base force=0 hostpath
     # Every --desktop question is also a flag, so the wizard degrades into a
     # one-liner for scripts. Defaults live here rather than in anxious_desktop
     # so that "unset" and "answered with an empty string" stay distinguishable.
@@ -1574,6 +1591,7 @@ cmd_anxious() {
             --box|-b)          box=${2:?--box needs a value}; shift ;;
             --path)            path_flag=${2:?--path needs a value}; shift ;;
             --as)              as_name=${2:?--as needs a value}; shift ;;
+            --force)           force=1 ;;
             --desktop)         with_desktop=1 ;;
             --name)            DESK_NAME=${2:?--name needs a value}; shift ;;
             --comment)         DESK_COMMENT=${2:?--comment needs a value}; shift ;;
@@ -1637,6 +1655,20 @@ cmd_anxious() {
     [ -n "$cmd" ] || die "usage: sora anxious [--sudo] <command> --box <box>"
     [ -n "$box" ] || die "--box is required (which box provides '$cmd'?)"
     case $cmd in (*[!A-Za-z0-9._+-]*) die "command name may only contain [A-Za-z0-9._+-]" ;; esac
+
+    # Before anything touches a container: this check is free, and failing it
+    # late would mean waking a box only to refuse.
+    if hostpath=$(anxious_host_conflict "$cmd"); then
+        if [ "$force" = 1 ]; then
+            warn "'$cmd' already exists on the host ($hostpath); --force: shadowing it"
+        else
+            warn "'$cmd' already exists on the host: $hostpath"
+            warn "$EXPORT_PATH usually precedes /usr/bin, so this export would shadow it"
+            warn "pick another name with --as, or pass --force to shadow it deliberately"
+            die "refusing to shadow a host binary"
+        fi
+    fi
+
     need_cmd distrobox
     container_exists "$box" || die "container '$box' does not exist"
     box_configured "$box" || warn "box '$box' is not managed by sora; exporting anyway"
@@ -2077,6 +2109,9 @@ Eager export
                                    export a binary that is NOT in the box's
                                    PATH (e.g. /opt/vendor/tool), under a name
                                    you choose
+                                   an export that would shadow a host binary
+                                   is refused; --as renames it, --force
+                                   shadows it deliberately
   sora anxious --list
   sora anxious --remove <command>
 

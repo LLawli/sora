@@ -20,6 +20,14 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
   helper was needed: `command -v` already echoes an absolute path back iff it
   is executable, which is the same question `sora-which` was answering.
 
+- `sora anxious` now refuses an export that would shadow a host binary, with
+  `--force` to do it deliberately. "Host binaries always win" is the project's
+  headline claim and it is *structural* for late resolution (the hook fires
+  only after `PATH` already missed), but nothing enforced it for eager export,
+  which writes a real file into `~/.local/bin` — usually ahead of `/usr/bin`.
+  The check is free and runs before any container is touched. Re-exporting an
+  existing export is still idempotent: sora's own wrapper is not a conflict.
+
 ### Fixed
 
 - `sora anxious --remove` no longer risks deleting an unrelated wrapper.

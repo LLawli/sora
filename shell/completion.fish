@@ -106,6 +106,7 @@ complete -c sora -n '__fish_seen_subcommand_from anxious' -l remove -x -a '(__so
 # filesystem must not suggest.
 complete -c sora -n '__fish_seen_subcommand_from anxious' -l path -x -d 'Absolute path to a binary INSIDE the box'
 complete -c sora -n '__fish_seen_subcommand_from anxious' -l as -x -d 'Export it under this name'
+complete -c sora -n '__fish_seen_subcommand_from anxious' -l force -d 'Shadow a host binary of the same name'
 # Desktop entry. Every value-taking flag below needs -x: without it fish
 # treats the flag as boolean and its value falls through to the generic rule,
 # which offers filenames.

@@ -79,6 +79,7 @@ assert_not_contains "$out" "htop" "'completion remove' offers only delegated one
 out=$(complete_bash sora anxious -)
 assert_contains "$out" "--path" "--path is offered"
 assert_contains "$out" "--as" "--as is offered"
+assert_contains "$out" "--force" "--force is offered"
 # An in-box path is exactly what the host's command names must not suggest.
 out=$(complete_bash sora anxious --path "")
 assert_not_contains "$out" "htop" "--path does not fall back to command names"

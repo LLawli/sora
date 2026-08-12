@@ -53,7 +53,9 @@ case $out in
 esac
 
 echo "== anxious export =="
-"$SORA" anxious sl --box "$BOX" || fail "anxious export failed"
+# --force: this exercises export mechanics against a real box, and 'sl' is a
+# real command that may well be installed on the machine running the suite.
+"$SORA" anxious sl --box "$BOX" --force || fail "anxious export failed"
 [ -x "$HOME/.local/bin/sl" ] || fail "wrapper not created in ~/.local/bin"
 "$SORA" anxious --list | grep -q '^sl ' || fail "anxious --list does not show the export"
 "$SORA" anxious --remove sl || fail "anxious --remove failed"

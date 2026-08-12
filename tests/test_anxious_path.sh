@@ -109,4 +109,48 @@ out=$("$SORA_BIN" anxious --path /opt/absent/thing --box devbox 2>&1) &&
 assert_contains "$out" "not found (or is not executable) inside box" \
     "a missing path says so, and says it is about the box"
 
-echo "ok: anxious --path/--as"
+# --- refusing to shadow a host binary ---------------------------------------
+# "Host binaries always win" is structural for late resolution but was never
+# enforced for eager export, and ~/.local/bin usually precedes /usr/bin.
+HOSTBIN="$SANDBOX/hostbin"
+mkdir -p "$HOSTBIN"
+printf '#!/bin/sh\necho host\n' > "$HOSTBIN/realtool"
+chmod 0755 "$HOSTBIN/realtool"
+export PATH="$HOSTBIN:$PATH"
+
+out=$("$SORA_BIN" anxious realtool --box devbox 2>&1) &&
+    fail "exporting a name the host already has must be refused"
+assert_contains "$out" "$HOSTBIN/realtool" "the message names the host binary it would shadow"
+assert_contains "$out" "--as" "the message offers the rename"
+assert_contains "$out" "--force" "the message offers the escape hatch"
+[ -e "$BIN/realtool" ] && fail "a refused export must leave no wrapper"
+grep -q '^realtool	' "$REG" && fail "a refused export must leave no registry row"
+
+# The refusal must be free: it happens before any container is touched.
+out=$("$SORA_BIN" anxious realtool --box nosuchbox 2>&1) &&
+    fail "the shadow check must fire regardless of the box"
+assert_contains "$out" "refusing to shadow" "the shadow check precedes the container check"
+
+out=$("$SORA_BIN" anxious realtool --box devbox --force 2>&1) ||
+    fail "--force must allow the export: $out"
+assert_contains "$out" "shadowing it" "--force says what it did"
+[ -x "$BIN/realtool" ] || fail "--force did not produce a wrapper"
+
+# Renaming is the other way out, and it must not be refused.
+out=$("$SORA_BIN" anxious realtool --as realtool-box --box devbox 2>&1) ||
+    fail "--as must sidestep the conflict: $out"
+[ -x "$BIN/realtool-box" ] || fail "no wrapper at $BIN/realtool-box"
+
+# --- re-exporting must stay idempotent --------------------------------------
+# The bug this check invites: after the first export the wrapper IS on PATH, so
+# a naive conflict test would refuse every user's second 'sora anxious'.
+out=$("$SORA_BIN" anxious --path /opt/vendor/tool --box devbox 2>&1) ||
+    fail "re-exporting an existing export must not be refused as a self-shadow: $out"
+assert_eq "$(grep -c '^tool	' "$REG")" "1" "re-export leaves exactly one registry row"
+
+# A shell builtin resolves to a bare word, not a path, and no file can shadow
+# it; treating that as a conflict would refuse a legitimate name.
+out=$("$SORA_BIN" anxious --path /opt/vendor/tool --as cd --box devbox 2>&1) ||
+    fail "a name that collides with a shell builtin must not be refused: $out"
+
+echo "ok: anxious --path/--as and the shadow refusal"

@@ -77,7 +77,7 @@ other's territory:
 | Tab completion | yes, see below (bash and zsh; fish reduced) | yes, plus the tool's own generator |
 | Coverage | every binary in every box, automatically | one command at a time, explicitly |
 | PATH pollution | none | one file per exported command |
-| Host precedence | structural (hook fires only after PATH misses) | depends on PATH order |
+| Host precedence | structural (hook fires only after PATH misses) | enforced: an export that would shadow a host binary is refused |
 
 **Why not simply export everything?** A box has thousands of binaries.
 Exporting them all floods PATH and tab completion, inverts precedence on any
@@ -167,6 +167,21 @@ $ sora anxious --path /opt/lacuna-webpki/webpki --as webpki-lacuna --box adv-br
 
 `--as` works on its own too, when a box's name for something is not the name
 you want on the host.
+
+**An export that would shadow a host binary is refused.** "Host binaries always
+win" is *structural* for late resolution — the hook only fires after PATH
+already missed — but eager export writes a real file into `~/.local/bin`, which
+usually precedes `/usr/bin`. So sora checks first and stops:
+
+```console
+$ sora anxious fd --box archbox
+sora: warning: 'fd' already exists on the host: /usr/bin/fd
+sora: warning: ~/.local/bin usually precedes /usr/bin, so this export would shadow it
+sora: warning: pick another name with --as, or pass --force to shadow it deliberately
+sora: error: refusing to shadow a host binary
+```
+
+The check costs nothing and runs before any container is touched.
 
 ### `sora anxious --desktop` — GUI apps in the menu
 

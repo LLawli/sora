@@ -206,6 +206,19 @@ PKCS#11.
    host's NSS database, mounted at the same absolute path and using the same
    `sql:` format.
 
+   **The delete side was the open question, and it is now measured.** NSS has
+   `-rawadd` but no `-rawdelete`, and `modutil -delete` goes through
+   `SECMOD_DeleteModule`, which could plausibly try to load the listed
+   modules — the very "load a Fedora `.so` under Debian" failure `-rawadd`
+   exists to dodge. Measured against a disposable Debian trixie box operating
+   on a copy of a real Fedora `~/.pki/nssdb`: `-rawadd` registered the host's
+   `p11-kit-proxy.so`, `-delete` removed exactly that stanza and reported
+   success, the NSS Internal module survived, `cert9.db` and `key4.db` were
+   left byte-identical, and the round trip returned `pkcs11.txt` byte-identical
+   to the original. The mitigations stay regardless (own-name guard, dated
+   backup, never fatal, warn with the manual command), because a failure here
+   should degrade to an inert orphan rather than a damaged database.
+
 2. **The executable path in the configuration file must be absolute.** True
    for every adapter: the browser is started from the desktop menu, with a
    `PATH` that frequently does not include the distrobox directory. This is

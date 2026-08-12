@@ -11,6 +11,33 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ### Added
 
+- `sora provide` registers a box resource at a host integration point, with
+  PKCS#11 as its first adapter: a token driver installed only inside a box,
+  usable by the host's browsers, with nothing installed on the host.
+
+  ```
+  sora provide pkcs11 <library> --box <box> --label <label> [--no-nss]
+  sora provide list
+  sora provide remove <name>
+  ```
+
+  It works because p11-kit has had remoting since 2017, built to forward a
+  token over SSH: a module configuration can name a command speaking the
+  protocol on stdin/stdout instead of a local library, so `ssh` becomes
+  `distrobox enter`. No daemon, no socket — the command starts on demand and
+  dies with its consumer.
+
+  The `~/.pki/nssdb` registration that makes Chromium/Brave/Chrome see the
+  modules is a singleton: written once regardless of how many modules are
+  published, removed when the last one goes, and never applied to a p11-kit
+  proxy sora did not register. `--no-nss` skips it. `sora doctor` gained
+  checks for missing module files, orphans, dead boxes, a `distrobox` path
+  that moved out from under a module, and provisions with no NSS proxy behind
+  them. `sora box rm` undoes provisions *before* destroying the container,
+  since undoing one runs `modutil` inside it.
+
+  Design and measurements: [docs/rfc-provide.md](docs/rfc-provide.md).
+
 - `sora anxious --path <abs-path-in-box> --as <name> --box <box>` exports a
   binary that is not in the box's `PATH`, under a name you choose. Integration
   binaries usually are not in `PATH` (vendor tools land in `/opt`), and until

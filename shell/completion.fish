@@ -57,6 +57,7 @@ complete -c sora -n __sora_no_sub -a conflicts   -d 'Commands present in more th
 complete -c sora -n __sora_no_sub -a pin         -d 'Force a command to resolve to one box'
 complete -c sora -n __sora_no_sub -a which       -d 'How a command would resolve'
 complete -c sora -n __sora_no_sub -a anxious     -d 'Export a real wrapper into PATH'
+complete -c sora -n __sora_no_sub -a provide     -d 'Publish a box resource at a host integration point'
 complete -c sora -n __sora_no_sub -a completion  -d 'Tab completion wiring'
 complete -c sora -n __sora_no_sub -a hook        -d 'Shell hook installation'
 complete -c sora -n __sora_no_sub -a doctor      -d 'Sanity-check the setup'
@@ -129,6 +130,18 @@ complete -c sora -n '__fish_seen_subcommand_from anxious' -l browser -d 'Fill in
 complete -c sora -n '__fish_seen_subcommand_from anxious' -l default-browser -d 'Make it the default http handler'
 complete -c sora -n '__fish_seen_subcommand_from anxious' -l detect-wmclass -d 'Start the app once to read its window class'
 complete -c sora -n '__fish_seen_subcommand_from anxious' -l no-prompt -d 'Take defaults, never ask'
+
+# provide
+complete -c sora -n '__fish_seen_subcommand_from provide; and not __fish_seen_subcommand_from pkcs11 list remove' \
+    -a 'pkcs11 list remove'
+complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from pkcs11' \
+    -l box -x -a '(__sora_boxes)' -d 'Which box has the driver'
+complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from pkcs11' \
+    -l label -x -d 'Short handle for this module'
+complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from pkcs11' \
+    -l no-nss -d 'Skip the ~/.pki/nssdb registration'
+complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from remove' \
+    -a '(__sora_registry provide.list)'
 
 # completion
 complete -c sora -n '__fish_seen_subcommand_from completion; and not __fish_seen_subcommand_from delegate list remove status' \

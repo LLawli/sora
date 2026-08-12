@@ -16,6 +16,8 @@ make_box_meta beta 20
 printf 'apt-cache\talpha\nhtop\tbeta\n' > "$XDG_CACHE_HOME/sora/index"
 printf 'htop\tbeta\tnosudo\t/x/htop\t/usr/bin/htop\n' > "$XDG_CONFIG_HOME/sora/anxious.list"
 printf 'apt-cache\talpha\n' > "$XDG_CONFIG_HOME/sora/delegate.list"
+printf 'sora-alpha-tok\tpkcs11\talpha\ttok\tnss\t/usr/lib/libtok.so\n' \
+    > "$XDG_CONFIG_HOME/sora/provide.list"
 
 # A stub that fails loudly: if completing ever shells out to a container
 # manager, these turn the test red instead of silently costing seconds.
@@ -102,6 +104,23 @@ assert_not_contains "$out" "htop" "--name does not fall back to command names"
 out=$(complete_bash sora anxious --desktop --wmclass "")
 assert_not_contains "$out" "htop" "--wmclass does not fall back to command names"
 
+# --- provide ----------------------------------------------------------------
+out=$(complete_bash sora "")
+assert_contains "$out" "provide" "bare 'sora ' lists provide"
+out=$(complete_bash sora provide "")
+assert_contains "$out" "pkcs11" "'sora provide' lists its subcommands"
+assert_contains "$out" "remove" "'sora provide' lists remove"
+out=$(complete_bash sora provide pkcs11 -)
+assert_contains "$out" "--no-nss" "'provide pkcs11' offers its flags"
+out=$(complete_bash sora provide pkcs11 --box "")
+assert_contains "$out" "alpha" "'provide pkcs11 --box' offers box names"
+out=$(complete_bash sora provide remove "")
+assert_contains "$out" "sora-alpha-tok" "'provide remove' offers provisioned names"
+assert_not_contains "$out" "htop" "'provide remove' offers only provisions"
+# The library path is inside the box, so host candidates would be misleading.
+out=$(complete_bash sora provide pkcs11 --label "")
+assert_not_contains "$out" "htop" "--label does not fall back to command names"
+
 # --- hook -------------------------------------------------------------------
 out=$(complete_bash sora hook "")
 assert_contains "$out" "install" "'sora hook' lists its subcommands"
@@ -109,7 +128,8 @@ out=$(complete_bash sora hook install "")
 assert_contains "$out" "fish" "'hook install' offers shell names"
 
 # --- the whole point: no container is ever touched --------------------------
-for words in "sora " "sora box enter " "sora which apt-" "sora anxious --box "; do
+for words in "sora " "sora box enter " "sora which apt-" "sora anxious --box " \
+             "sora provide " "sora provide remove " "sora provide pkcs11 --box "; do
     # shellcheck disable=SC2086
     out=$(complete_bash $words "")
     assert_not_contains "$out" "CONTAINER TOUCHED" "completing '$words' touches no container"
@@ -178,6 +198,20 @@ if command -v fish >/dev/null 2>&1; then
     assert_not_contains "$out" "CHANGELOG" "fish: --path must not fall back to filenames"
     out=$(fish_complete 'sora anxious --as ')
     assert_not_contains "$out" "CHANGELOG" "fish: --as must not fall back to filenames"
+
+    printf 'sora-gamma-tok\tpkcs11\tgamma\ttok\tnss\t/usr/lib/libtok.so\n' \
+        > "$XDG_CONFIG_HOME/sora/provide.list"
+    out=$(fish_complete 'sora prov')
+    assert_contains "$out" "provide" "fish: provide is offered"
+    out=$(fish_complete 'sora provide ')
+    assert_contains "$out" "pkcs11" "fish: provide lists its subcommands"
+    out=$(fish_complete 'sora provide pkcs11 --box ')
+    assert_contains "$out" "gamma" "fish: provide --box offers box names"
+    assert_not_contains "$out" "CHANGELOG" "fish: provide --box must not fall back to filenames"
+    out=$(fish_complete 'sora provide pkcs11 --label ')
+    assert_not_contains "$out" "CHANGELOG" "fish: --label must not fall back to filenames"
+    out=$(fish_complete 'sora provide remove ')
+    assert_contains "$out" "sora-gamma-tok" "fish: provide remove offers provisioned names"
 fi
 
 # --- installed to the standard per-shell locations --------------------------

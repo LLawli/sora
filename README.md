@@ -251,6 +251,54 @@ pass `--wmclass`.
 and so does `sora box rm` for everything that box provided: a launcher left
 pointing at a deleted container is worse than no launcher.
 
+### `sora provide` — publish a box resource to the host
+
+Much of what you want out of a box is never typed by anyone. It is looked up
+by a host program at its own integration point: NSS looking for a PKCS#11
+module, a browser looking for a signing helper, the desktop looking for a MIME
+handler. The shape is always the same — a host configuration file whose "run
+this" field points at something that enters the box — and only the file format
+changes. `anxious --desktop` is the first adapter of that shape; `provide` is
+the general form.
+
+Today it implements PKCS#11: a smartcard/token driver installed **only inside
+a box**, usable by the host's browsers.
+
+```console
+$ sora provide pkcs11 /usr/lib/libaetpkss.so --box adv-br --label safesign
+sora: wrote ~/.config/pkcs11/modules/sora-adv-br-safesign.module
+sora: registered /usr/lib64/p11-kit-proxy.so in ~/.pki/nssdb as sora-p11-kit-proxy
+sora: the host's p11-kit sees module 'sora-adv-br-safesign'
+sora: restart Chromium/Brave/Chrome for them to pick up the module
+
+$ sora provide list
+$ sora provide remove sora-adv-br-safesign
+```
+
+Nothing is installed on the host. It works because p11-kit has had *remoting*
+since 2017, built to forward a token over SSH: a module's configuration can
+name a command that speaks the protocol on stdin/stdout instead of a local
+library. Swapping `ssh` for `distrobox enter` is the whole trick. There is no
+daemon and no socket — p11-kit starts the command on demand and it dies with
+the consumer.
+
+The `--no-nss` flag skips the `~/.pki/nssdb` registration, which is what makes
+Chromium, Brave and Chrome see the module (Firefox has its own per-profile
+database). That registration is a singleton: it is written once however many
+modules you publish, and removed when the last one goes. sora will not touch a
+p11-kit proxy it did not register.
+
+**What this cannot become.** Not "use any `.so` from the box". PKCS#11 is
+remotable by a happy accident of design — a stable, coarse function table with
+no callbacks and well-defined memory ownership — and even then somebody had to
+write the marshalling by hand, function by function. The correct generalization
+is upward, at the integration point, not downward at the ABI. See
+[docs/rfc-provide.md](docs/rfc-provide.md).
+
+**Security.** Publishing a box resource gives any host application the same
+access it would have if the resource were local. That is equivalent, not worse
+— but worth saying, because people reach for containers expecting the opposite.
+
 ### Tab completion
 
 The `sora` command completes itself out of the box — subcommands, flags, box
@@ -354,10 +402,10 @@ Implementation detail deliberately lives out of this README:
   (keep-id/subuid permissions, sudo resetting `$HOME`, heredoc quoting…).
 - [docs/decisions.md](docs/decisions.md) — why bash, why not a dedicated
   system user, why not a PATH shim, why not export everything, prior art.
-- [docs/rfc-provide.md](docs/rfc-provide.md) — proposal (not implemented):
-  `sora provide`, registering a box resource at a host integration point
-  (PKCS#11 modules, native-messaging manifests), with two working reference
-  implementations behind it.
+- [docs/rfc-provide.md](docs/rfc-provide.md) — the design behind `sora
+  provide`: why one command with adapters, why PKCS#11 is remotable and an
+  arbitrary `.so` is not, the measurements, and the traps. PKCS#11 is shipped;
+  the native-messaging adapter is still a proposal.
 - [docs/releasing.md](docs/releasing.md) — tag-triggered releases,
   `bin/release`.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — what CI enforces.

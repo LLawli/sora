@@ -54,6 +54,18 @@ _sora() {
             return ;;
         --priority|--pkg-manager|--hide)
             return ;;   # free-form: an integer, a pm name, a path
+        --categories)
+            mapfile -t COMPREPLY < <(compgen -W \
+                "Network;WebBrowser; Development; Graphics; AudioVideo; \
+                 Office; Game; System; Utility;" -- "$cur")
+            return ;;
+        --mime)
+            mapfile -t COMPREPLY < <(compgen -W \
+                "text/html;x-scheme-handler/http;x-scheme-handler/https; \
+                 x-scheme-handler/mailto; inode/directory;" -- "$cur")
+            return ;;
+        --name|--comment|--generic-name|--icon|--keywords|--wmclass)
+            return ;;   # free-form: whatever the user wants to read in the menu
     esac
 
     # Find the subcommand: the first word that is not an option.
@@ -117,7 +129,11 @@ _sora() {
         anxious)
             case $cur in
                 -*) mapfile -t COMPREPLY < <(compgen -W \
-                        "--sudo --with-completion --box --list --remove" -- "$cur")
+                        "--sudo --with-completion --box --list --remove \
+                         --desktop --name --generic-name --comment --icon \
+                         --categories --mime --keywords --wmclass --terminal \
+                         --browser --default-browser --detect-wmclass \
+                         --no-prompt" -- "$cur")
                     return ;;
             esac
             case $prev in

@@ -92,9 +92,18 @@ assert_contains "$content" 'libdnf5-plugin-actions' \
     "inbox-install dnf5: installs the actions plugin (absent from fedora-toolbox)"
 
 # --- helper scripts ---------------------------------------------------------
-for t in detect-pm which; do
+# These run INSIDE a box, under whatever /bin/sh that distro ships, so bashisms
+# here fail on someone else's machine and never on ours.
+for t in detect-pm which desktop-scan; do
     "$SORA_BIN" _template "$t" > "$SANDBOX/$t"
     sh -n "$SANDBOX/$t" || fail "$t: generated script fails sh -n"
 done
+
+# desktop-scan takes a mode and an argument; neither may be assumed present.
+"$SORA_BIN" _template desktop-scan > "$SANDBOX/desktop-scan"
+sh "$SANDBOX/desktop-scan" >/dev/null 2>&1 &&
+    fail "desktop-scan must reject being called with no arguments"
+sh "$SANDBOX/desktop-scan" entry >/dev/null 2>&1 &&
+    fail "desktop-scan must reject a mode with no argument"
 
 echo "ok: templates"

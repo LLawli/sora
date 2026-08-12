@@ -88,6 +88,20 @@ _sora() {
                         '--box[which box provides it]:box:_sora_boxes' \
                         '--list[list exported wrappers]' \
                         "--remove[remove an exported wrapper]:command:{_sora_registry anxious.list}" \
+                        '--desktop[also write a .desktop entry for a GUI app]' \
+                        '--name[name shown in the menu]:name:' \
+                        '--generic-name[generic name, e.g. Web Browser]:generic name:' \
+                        '--comment[one-line description]:comment:' \
+                        '--icon[icon name inside the box]:icon:' \
+                        '--categories[menu categories]:categories:(Network\;WebBrowser\; Development\; Graphics\; AudioVideo\; Office\; Game\; System\; Utility\;)' \
+                        '--mime[MimeType list]:mimetype:' \
+                        '--keywords[search keywords]:keywords:' \
+                        '--wmclass[StartupWMClass of the app window]:wmclass:' \
+                        '--terminal[the app runs in a terminal]' \
+                        '--browser[fill in the web-browser MimeType and categories]' \
+                        '--default-browser[also make it the default http handler]' \
+                        '--detect-wmclass[start the app once to read its window class]' \
+                        '--no-prompt[take defaults, never ask]' \
                         '*:command:_sora_indexed' ;;
                 completion)
                     if (( CURRENT == 2 )); then

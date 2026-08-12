@@ -157,6 +157,74 @@ Package managers are the flagship use case for eager mode precisely because
 they get invoked from scripts and other contexts where late resolution does
 not apply.
 
+### `sora anxious --desktop` — GUI apps in the menu
+
+A graphical app in a box needs more than a wrapper: it needs a `.desktop`
+entry, an icon the host can actually see, and — for a browser — the MIME
+types that let it become the default handler.
+
+```console
+$ sora anxious --desktop chromium --box archbox
+sora: found an entry inside 'archbox': Chromium
+sora: name shown in the menu [Chromium]:
+sora: generic name (e.g. Web Browser) [Web Browser]:
+sora: one-line description [Access the Internet]:
+sora: icon name inside the box [chromium]:
+sora: menu categories [Network;WebBrowser;]:
+sora: MimeType (empty for none) [text/html;x-scheme-handler/http;...]:
+sora: search keywords [web;browser;]:
+sora: imported 9 icon file(s) as 'sora-chromium'
+sora: wrote ~/.local/share/applications/sora-chromium.desktop
+sora: make 'Chromium' the host's default web browser? [y/N]
+```
+
+Every default is read out of the box's own entry first, so a packaged app is
+mostly Enter, Enter, Enter. The questions only get real for the case
+`distrobox-export --app` cannot serve at all: an app that ships **no**
+`.desktop` (a tarball install, an AppImage, a browser dropped into `/opt`).
+
+Every question is also a flag, so the same thing scripts:
+
+```console
+$ sora anxious --desktop chromium --box archbox --no-prompt \
+    --name Chromium --browser --default-browser
+```
+
+`--name`, `--generic-name`, `--comment`, `--icon`, `--categories`, `--mime`,
+`--keywords`, `--wmclass`, `--terminal`, `--browser`, `--default-browser`,
+`--detect-wmclass`, `--no-prompt`. Without a tty, sora takes the defaults
+instead of blocking.
+
+**What this does that `distrobox-export --app` does not:**
+
+- **It works with no `.desktop` in the box.** `distrobox-export` needs an
+  existing entry to copy; this builds one from answers.
+- **`Exec=` is the anxious wrapper**, by absolute path. No `distrobox enter`
+  prefix, no quoting dance around the `%U` field codes — and because the
+  wrapper works from any context, the app is eligible to be a default handler.
+- **`Icon=` stays a name.** Every size found in the box is extracted into
+  `~/.local/share/icons/hicolor/*/apps/sora-<cmd>.*`, so the icon theme keeps
+  choosing resolution and dark variant. `distrobox-export` pins one absolute
+  file and loses both.
+- **`MimeType` is settable**, which is the only way a browser inside a box
+  becomes the host's `http`/`https` handler. `--browser` fills it in and
+  offers to run `xdg-settings` for you.
+- **`StartupWMClass` is inherited, not guessed.** `distrobox-export` writes
+  the name you typed; when that is wrong (Chromium reports
+  `Chromium-browser`), the dock shows a second generic icon instead of
+  grouping the window with its launcher. sora takes the value from the box's
+  entry, and only when there is none does it offer to start the app once and
+  read the class off the real window.
+
+Window-class detection needs a compositor that will say what is on screen:
+X11/XWayland via `xprop`, Hyprland via `hyprctl`, sway via `swaymsg`. GNOME on
+Wayland exposes nothing, so there it tells you to find the class yourself and
+pass `--wmclass`.
+
+`sora anxious --remove <cmd>` takes the entry and every imported icon with it,
+and so does `sora box rm` for everything that box provided: a launcher left
+pointing at a deleted container is worse than no launcher.
+
 ### Tab completion
 
 The `sora` command completes itself out of the box — subcommands, flags, box

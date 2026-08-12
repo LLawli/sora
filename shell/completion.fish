@@ -101,6 +101,28 @@ complete -c sora -n '__fish_seen_subcommand_from anxious' -l with-completion -d 
 complete -c sora -n '__fish_seen_subcommand_from anxious' -l box -x -a '(__sora_boxes)' -d 'Which box provides it'
 complete -c sora -n '__fish_seen_subcommand_from anxious' -l list -d 'List exported wrappers'
 complete -c sora -n '__fish_seen_subcommand_from anxious' -l remove -x -a '(__sora_registry anxious.list)' -d 'Remove a wrapper'
+# Desktop entry. Every value-taking flag below needs -x: without it fish
+# treats the flag as boolean and its value falls through to the generic rule,
+# which offers filenames.
+complete -c sora -n '__fish_seen_subcommand_from anxious' -l desktop -d 'Also write a .desktop entry'
+complete -c sora -n '__fish_seen_subcommand_from anxious' -l name -x -d 'Name shown in the menu'
+complete -c sora -n '__fish_seen_subcommand_from anxious' -l generic-name -x -d 'Generic name, e.g. Web Browser'
+complete -c sora -n '__fish_seen_subcommand_from anxious' -l comment -x -d 'One-line description'
+complete -c sora -n '__fish_seen_subcommand_from anxious' -l icon -x -d 'Icon name inside the box'
+# The semicolons must be backslash-escaped even inside quotes: fish parses the
+# -a list as script, so a bare ';' ends the token and 'Network;WebBrowser;'
+# would be offered as two useless halves.
+complete -c sora -n '__fish_seen_subcommand_from anxious' -l categories -x \
+    -a 'Network\;WebBrowser\; Development\; Graphics\; AudioVideo\; Office\; Game\; System\; Utility\;' \
+    -d 'Menu categories'
+complete -c sora -n '__fish_seen_subcommand_from anxious' -l mime -x -d 'MimeType list'
+complete -c sora -n '__fish_seen_subcommand_from anxious' -l keywords -x -d 'Search keywords'
+complete -c sora -n '__fish_seen_subcommand_from anxious' -l wmclass -x -d 'StartupWMClass of the app window'
+complete -c sora -n '__fish_seen_subcommand_from anxious' -l terminal -d 'The app runs in a terminal'
+complete -c sora -n '__fish_seen_subcommand_from anxious' -l browser -d 'Fill in web-browser MimeType/categories'
+complete -c sora -n '__fish_seen_subcommand_from anxious' -l default-browser -d 'Make it the default http handler'
+complete -c sora -n '__fish_seen_subcommand_from anxious' -l detect-wmclass -d 'Start the app once to read its window class'
+complete -c sora -n '__fish_seen_subcommand_from anxious' -l no-prompt -d 'Take defaults, never ask'
 
 # completion
 complete -c sora -n '__fish_seen_subcommand_from completion; and not __fish_seen_subcommand_from delegate list remove status' \

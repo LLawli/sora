@@ -158,6 +158,75 @@ Gerenciadores de pacotes são o caso de uso principal do modo ansioso
 justamente porque são invocados de scripts e de contextos onde a resolução
 tardia não vale.
 
+### `sora anxious --desktop` — apps gráficos no menu
+
+Um app gráfico dentro de um box precisa de mais que um wrapper: precisa de um
+`.desktop`, de um ícone que o host consiga enxergar e, no caso de um
+navegador, dos tipos MIME que permitem virar handler padrão.
+
+```console
+$ sora anxious --desktop chromium --box archbox
+sora: found an entry inside 'archbox': Chromium
+sora: name shown in the menu [Chromium]:
+sora: generic name (e.g. Web Browser) [Web Browser]:
+sora: one-line description [Access the Internet]:
+sora: icon name inside the box [chromium]:
+sora: menu categories [Network;WebBrowser;]:
+sora: MimeType (empty for none) [text/html;x-scheme-handler/http;...]:
+sora: search keywords [web;browser;]:
+sora: imported 9 icon file(s) as 'sora-chromium'
+sora: wrote ~/.local/share/applications/sora-chromium.desktop
+sora: make 'Chromium' the host's default web browser? [y/N]
+```
+
+Todo valor padrão sai primeiro do `.desktop` que já existe dentro do box, ou
+seja: para um app empacotado é Enter, Enter, Enter. As perguntas só viram
+perguntas de verdade no caso que o `distrobox-export --app` simplesmente não
+atende: um app que **não** traz `.desktop` nenhum (instalação por tarball,
+AppImage, navegador jogado em `/opt`).
+
+Toda pergunta também é flag, então a mesma coisa funciona em script:
+
+```console
+$ sora anxious --desktop chromium --box archbox --no-prompt \
+    --name Chromium --browser --default-browser
+```
+
+`--name`, `--generic-name`, `--comment`, `--icon`, `--categories`, `--mime`,
+`--keywords`, `--wmclass`, `--terminal`, `--browser`, `--default-browser`,
+`--detect-wmclass`, `--no-prompt`. Sem tty, o sora assume os padrões em vez de
+travar esperando resposta.
+
+**O que isto faz e o `distrobox-export --app` não faz:**
+
+- **Funciona sem `.desktop` no box.** O `distrobox-export` precisa de uma
+  entrada existente para copiar; aqui ela é construída a partir das respostas.
+- **`Exec=` é o wrapper do anxious**, em caminho absoluto. Sem prefixo
+  `distrobox enter`, sem dança de aspas em volta dos códigos `%U`, e como o
+  wrapper funciona em qualquer contexto o app fica elegível a handler padrão.
+- **`Icon=` continua sendo um nome.** Todo tamanho encontrado no box é
+  extraído para `~/.local/share/icons/hicolor/*/apps/sora-<cmd>.*`, então o
+  tema de ícones continua escolhendo resolução e variante escura. O
+  `distrobox-export` fixa um arquivo absoluto e perde as duas coisas.
+- **`MimeType` é configurável**, que é o único jeito de um navegador dentro do
+  box virar o handler de `http`/`https` do host. O `--browser` preenche isso e
+  oferece rodar o `xdg-settings`.
+- **`StartupWMClass` é herdado, não chutado.** O `distrobox-export` escreve o
+  nome que você digitou; quando esse nome está errado (o Chromium reporta
+  `Chromium-browser`), a dock mostra um segundo ícone genérico em vez de
+  agrupar a janela com o lançador. O sora pega o valor da entrada do box e, só
+  quando não existe nenhum, oferece abrir o app uma vez para ler a classe da
+  janela real.
+
+A detecção de classe de janela depende de um compositor disposto a dizer o que
+está na tela: X11/XWayland via `xprop`, Hyprland via `hyprctl`, sway via
+`swaymsg`. O GNOME no Wayland não expõe nada, então lá ele avisa para você
+descobrir a classe e passar `--wmclass`.
+
+O `sora anxious --remove <cmd>` leva junto a entrada e todos os ícones
+importados, e o `sora box rm` faz o mesmo para tudo que aquele box fornecia:
+um lançador apontando para container removido é pior que lançador nenhum.
+
 ### Tab completion
 
 O próprio comando `sora` se completa desde a instalação: subcomandos, flags,

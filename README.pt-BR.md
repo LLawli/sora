@@ -334,6 +334,10 @@ Detalhe de implementação fica deliberadamente fora deste README (em inglês):
 - [docs/decisions.md](docs/decisions.md) — por que bash, por que não um
   usuário de sistema dedicado, por que não um shim de PATH, por que não
   exportar tudo, prior art.
+- [docs/rfc-provide.md](docs/rfc-provide.md) — proposta (não implementada):
+  `sora provide`, registrar um recurso da box num ponto de integração do host
+  (módulos PKCS#11, manifestos de native messaging), com duas implementações
+  de referência funcionando por trás.
 - [docs/releasing.md](docs/releasing.md) — releases por tag, `bin/release`.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — o que o CI impõe.
 

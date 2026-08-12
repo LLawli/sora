@@ -9,6 +9,43 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ## [Unreleased]
 
+### Added
+
+- `sora anxious --desktop <cmd> --box <box>` writes a `.desktop` entry for a
+  graphical app in a box, asking only for what it cannot read off the box.
+  Defaults are seeded from the app's own entry inside the container, so a
+  packaged app is mostly Enter; the questions matter for the case
+  `distrobox-export --app` cannot serve at all, an app that ships no
+  `.desktop` (tarball, AppImage, a browser in `/opt`).
+
+  Against `distrobox-export --app`: `Exec=` is the anxious wrapper by absolute
+  path, so there is no `distrobox enter` prefix and no quoting around the `%U`
+  field codes; `Icon=` stays a theme name with every size extracted into
+  `~/.local/share/icons/hicolor/*/apps/sora-<cmd>.*`, instead of one pinned
+  absolute file that loses per-size and dark variants; `MimeType` is settable,
+  which is what lets a browser in a box become the host's `http`/`https`
+  handler (`--browser` fills it in and offers `xdg-settings`); and
+  `StartupWMClass` is inherited from the box's entry rather than guessed from
+  the command name, with an optional detection pass (`xprop`, `hyprctl`,
+  `swaymsg`) when there is nothing to inherit.
+
+  Every question is also a flag — `--name`, `--generic-name`, `--comment`,
+  `--icon`, `--categories`, `--mime`, `--keywords`, `--wmclass`, `--terminal`,
+  `--browser`, `--default-browser`, `--detect-wmclass`, `--no-prompt` — so the
+  wizard collapses into a one-liner for provisioning scripts. Without a tty it
+  takes the defaults instead of blocking. Using any of them without
+  `--desktop` is an error rather than a silently ignored flag.
+
+- `sora anxious --list` gained a DESKTOP column showing which exports have an
+  entry.
+
+### Changed
+
+- `sora anxious --remove` now also removes the desktop entry and every icon it
+  imported, and `sora box rm` does the same for every command that box
+  provided: a launcher pointing into a deleted container is worse than no
+  launcher.
+
 ## [0.2.1] - 2026-08-11
 
 ### Added

@@ -68,6 +68,8 @@ at the same absolute path, so in-box hooks can call them directly:
 | `sora-reindex` | inside box, as user | enumerate executables → `index.d/<box>.list` → merge |
 | `sora-detect-pm` | inside box, as user | package manager detection by binary presence |
 | `sora-which` | inside box, as user | `command -v` without shell-quoting games through `distrobox enter` |
+| `sora-capture-bash` | inside box, as user | ask the box's own bash for completion candidates (live delegation) |
+| `sora-desktop-scan` | inside box, as user | locate an app's `.desktop` and its icon files for `anxious --desktop`; prints **paths only**, so the host can `podman cp` them out — a binary icon would not survive command substitution |
 
 Installed inside each box at creation time (root side):
 

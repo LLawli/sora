@@ -88,6 +88,8 @@ _sora() {
                         '--box[which box provides it]:box:_sora_boxes' \
                         '--list[list exported wrappers]' \
                         "--remove[remove an exported wrapper]:command:{_sora_registry anxious.list}" \
+                        '--path[absolute path to a binary INSIDE the box]:path:' \
+                        '--as[export it under this name]:name:' \
                         '--desktop[also write a .desktop entry for a GUI app]' \
                         '--name[name shown in the menu]:name:' \
                         '--generic-name[generic name, e.g. Web Browser]:generic name:' \

@@ -158,6 +158,18 @@ Gerenciadores de pacotes são o caso de uso principal do modo ansioso
 justamente porque são invocados de scripts e de contextos onde a resolução
 tardia não vale.
 
+**Exportar algo que não está no PATH da box.** Binário de integração quase
+nunca está: ferramenta de fornecedor cai em `/opt`, e o `anxious` resolve
+*nome* de comando. O `--path` pega o binário direto e o `--as` dá o nome do
+export:
+
+```console
+$ sora anxious --path /opt/lacuna-webpki/webpki --as webpki-lacuna --box adv-br
+```
+
+O `--as` funciona sozinho também, quando o nome que a box dá para algo não é o
+nome que você quer no host.
+
 ### `sora anxious --desktop` — apps gráficos no menu
 
 Um app gráfico dentro de um box precisa de mais que um wrapper: precisa de um

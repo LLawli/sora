@@ -66,6 +66,10 @@ _sora() {
             return ;;
         --name|--comment|--generic-name|--icon|--keywords|--wmclass)
             return ;;   # free-form: whatever the user wants to read in the menu
+        --path|--as)
+            # --path is a path INSIDE the box, so the host filesystem is the
+            # wrong candidate list; offering nothing is deliberate, not a gap.
+            return ;;
     esac
 
     # Find the subcommand: the first word that is not an option.
@@ -130,6 +134,7 @@ _sora() {
             case $cur in
                 -*) mapfile -t COMPREPLY < <(compgen -W \
                         "--sudo --with-completion --box --list --remove \
+                         --path --as \
                          --desktop --name --generic-name --comment --icon \
                          --categories --mime --keywords --wmclass --terminal \
                          --browser --default-browser --detect-wmclass \

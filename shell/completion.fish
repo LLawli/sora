@@ -101,6 +101,11 @@ complete -c sora -n '__fish_seen_subcommand_from anxious' -l with-completion -d 
 complete -c sora -n '__fish_seen_subcommand_from anxious' -l box -x -a '(__sora_boxes)' -d 'Which box provides it'
 complete -c sora -n '__fish_seen_subcommand_from anxious' -l list -d 'List exported wrappers'
 complete -c sora -n '__fish_seen_subcommand_from anxious' -l remove -x -a '(__sora_registry anxious.list)' -d 'Remove a wrapper'
+# Export by path, under a chosen name. Both take a value, so both need -x;
+# neither offers candidates, because an in-box path is exactly what the host
+# filesystem must not suggest.
+complete -c sora -n '__fish_seen_subcommand_from anxious' -l path -x -d 'Absolute path to a binary INSIDE the box'
+complete -c sora -n '__fish_seen_subcommand_from anxious' -l as -x -d 'Export it under this name'
 # Desktop entry. Every value-taking flag below needs -x: without it fish
 # treats the flag as boolean and its value falls through to the generic rule,
 # which offers filenames.

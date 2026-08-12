@@ -75,6 +75,16 @@ out=$(complete_bash sora completion remove "")
 assert_contains "$out" "apt-cache" "'completion remove' offers delegated commands"
 assert_not_contains "$out" "htop" "'completion remove' offers only delegated ones"
 
+# --- export by path, under a chosen name ------------------------------------
+out=$(complete_bash sora anxious -)
+assert_contains "$out" "--path" "--path is offered"
+assert_contains "$out" "--as" "--as is offered"
+# An in-box path is exactly what the host's command names must not suggest.
+out=$(complete_bash sora anxious --path "")
+assert_not_contains "$out" "htop" "--path does not fall back to command names"
+out=$(complete_bash sora anxious --as "")
+assert_not_contains "$out" "htop" "--as does not fall back to command names"
+
 # --- desktop-entry flags ----------------------------------------------------
 out=$(complete_bash sora anxious --desk)
 assert_contains "$out" "--desktop" "'anxious --desk' completes to --desktop"
@@ -162,6 +172,11 @@ if command -v fish >/dev/null 2>&1; then
     assert_contains "$out" "Network;WebBrowser;" "fish: --categories offers its values"
     out=$(fish_complete 'sora anxious --deskt')
     assert_contains "$out" "--desktop" "fish: --desktop is offered"
+
+    out=$(fish_complete 'sora anxious --path ')
+    assert_not_contains "$out" "CHANGELOG" "fish: --path must not fall back to filenames"
+    out=$(fish_complete 'sora anxious --as ')
+    assert_not_contains "$out" "CHANGELOG" "fish: --as must not fall back to filenames"
 fi
 
 # --- installed to the standard per-shell locations --------------------------

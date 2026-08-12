@@ -157,6 +157,17 @@ Package managers are the flagship use case for eager mode precisely because
 they get invoked from scripts and other contexts where late resolution does
 not apply.
 
+**Exporting something that is not in the box's PATH.** Integration binaries
+usually are not: vendor tools land in `/opt`, and `anxious` resolves a command
+*name*. `--path` takes the binary directly and `--as` names the export:
+
+```console
+$ sora anxious --path /opt/lacuna-webpki/webpki --as webpki-lacuna --box adv-br
+```
+
+`--as` works on its own too, when a box's name for something is not the name
+you want on the host.
+
 ### `sora anxious --desktop` — GUI apps in the menu
 
 A graphical app in a box needs more than a wrapper: it needs a `.desktop`

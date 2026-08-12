@@ -11,6 +11,26 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ### Added
 
+- `sora anxious --path <abs-path-in-box> --as <name> --box <box>` exports a
+  binary that is not in the box's `PATH`, under a name you choose. Integration
+  binaries usually are not in `PATH` (vendor tools land in `/opt`), and until
+  now the only way through was to symlink into `/usr/local/bin` as root inside
+  the box just to give sora a name it could resolve. `--as` also works on its
+  own, to export under a different name than the box uses. No new in-box
+  helper was needed: `command -v` already echoes an absolute path back iff it
+  is executable, which is the same question `sora-which` was answering.
+
+### Fixed
+
+- `sora anxious --remove` no longer risks deleting an unrelated wrapper.
+  `distrobox-export --delete` derives its target from the *binary* name, so
+  for a wrapper renamed with `--as` it would have gone after
+  `~/.local/bin/<binary>` — potentially another command's export. Whether a
+  rename happened is derived from the two names the registry already carries,
+  so the on-disk format is unchanged.
+
+### Added
+
 - `sora anxious --desktop <cmd> --box <box>` writes a `.desktop` entry for a
   graphical app in a box, asking only for what it cannot read off the box.
   Defaults are seeded from the app's own entry inside the container, so a

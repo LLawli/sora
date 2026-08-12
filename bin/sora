@@ -1535,7 +1535,11 @@ anxious_remove() {
     box=$(printf '%s' "$line" | cut -f2)
     wrapper=$(printf '%s' "$line" | cut -f4)
     binpath=$(printf '%s' "$line" | cut -f5)
-    if container_exists "$box"; then
+    # 'distrobox-export --delete' derives what to delete from the BINARY name,
+    # so for a wrapper renamed by --as it would delete $EXPORT_PATH/<binary>,
+    # which may well be somebody else's export. Whether a rename happened is
+    # derived by comparing the two names the registry already carries.
+    if [ "${wrapper##*/}" = "${binpath##*/}" ] && container_exists "$box"; then
         distrobox enter --name "$box" -- distrobox-export --bin "$binpath" \
             --export-path "$EXPORT_PATH" --delete >/dev/null 2>&1 || rm -f "$wrapper"
     else
@@ -1553,7 +1557,7 @@ anxious_remove() {
 
 cmd_anxious() {
     local cmd='' box='' use_sudo=0 mode=add with_completion=0 binpath sudoflag
-    local with_desktop=0
+    local with_desktop=0 path_flag='' as_name='' lookup base
     # Every --desktop question is also a flag, so the wizard degrades into a
     # one-liner for scripts. Defaults live here rather than in anxious_desktop
     # so that "unset" and "answered with an empty string" stay distinguishable.
@@ -1568,6 +1572,8 @@ cmd_anxious() {
             --sudo)            use_sudo=1 ;;
             --with-completion) with_completion=1 ;;
             --box|-b)          box=${2:?--box needs a value}; shift ;;
+            --path)            path_flag=${2:?--path needs a value}; shift ;;
+            --as)              as_name=${2:?--as needs a value}; shift ;;
             --desktop)         with_desktop=1 ;;
             --name)            DESK_NAME=${2:?--name needs a value}; shift ;;
             --comment)         DESK_COMMENT=${2:?--comment needs a value}; shift ;;
@@ -1606,6 +1612,28 @@ cmd_anxious() {
                 anxious_remove "$cmd"; return ;;
     esac
 
+    # --path names the thing to resolve; a positional names it too. Accepting
+    # both would silently drop one of them.
+    if [ -n "$path_flag" ]; then
+        [ -z "$cmd" ] || die "--path and a command name are mutually exclusive"
+        case $path_flag in
+            /*) ;;
+            *)  die "--path must be an absolute path inside the box" ;;
+        esac
+        # The path is interpolated into the wrapper script distrobox-export
+        # generates. A quote or a $ there produces a broken wrapper that only
+        # fails when someone runs it.
+        case $path_flag in
+            *[[:space:]\"\'\$\`]*)
+                die "--path may not contain whitespace, quotes, '\$' or backticks" ;;
+        esac
+    fi
+
+    # The export name is the identity everywhere downstream: the wrapper
+    # filename, the registry key, the completion target, the .desktop name.
+    [ -n "$as_name" ] && cmd=$as_name
+    [ -n "$cmd" ] || cmd=${path_flag##*/}
+
     [ -n "$cmd" ] || die "usage: sora anxious [--sudo] <command> --box <box>"
     [ -n "$box" ] || die "--box is required (which box provides '$cmd'?)"
     case $cmd in (*[!A-Za-z0-9._+-]*) die "command name may only contain [A-Za-z0-9._+-]" ;; esac
@@ -1614,9 +1642,13 @@ cmd_anxious() {
     box_configured "$box" || warn "box '$box' is not managed by sora; exporting anyway"
 
     ensure_libexec
-    binpath=$(distrobox enter --name "$box" -- "$SORA_DATA/libexec/sora-which" "$cmd") ||
-        die "'$cmd' was not found inside box '$box'"
-    [ -n "$binpath" ] || die "'$cmd' was not found inside box '$box'"
+    # 'command -v' answers both questions with one round-trip: for a name it
+    # searches the box's PATH, and for an absolute path it echoes it back iff
+    # it is executable. So --path needs no new in-box helper.
+    lookup=${path_flag:-$cmd}
+    binpath=$(distrobox enter --name "$box" -- "$SORA_DATA/libexec/sora-which" "$lookup") ||
+        die "'$lookup' was not found (or is not executable) inside box '$box'"
+    [ -n "$binpath" ] || die "'$lookup' was not found (or is not executable) inside box '$box'"
 
     mkdir -p "$EXPORT_PATH"
     local extra=()
@@ -1624,6 +1656,15 @@ cmd_anxious() {
     distrobox enter --name "$box" -- distrobox-export --bin "$binpath" \
         --export-path "$EXPORT_PATH" "${extra[@]}" ||
         die "distrobox-export failed for '$cmd' in '$box'"
+
+    # distrobox-export always names the wrapper after the binary. sora does not
+    # reimplement wrapper generation (see docs/architecture.md), so --as is
+    # honoured by renaming what it just wrote.
+    base=${binpath##*/}
+    if [ "$base" != "$cmd" ]; then
+        mv -f "$EXPORT_PATH/$base" "$EXPORT_PATH/$cmd" ||
+            die "distrobox-export wrote no wrapper at $EXPORT_PATH/$base"
+    fi
 
     mkdir -p "$SORA_CONFIG"
     touch "$ANXIOUS_REG"
@@ -2032,6 +2073,10 @@ Eager export
   sora anxious [--sudo] [--with-completion] <command> --box <box>
                                    --with-completion also installs the tool's
                                    own shell completion (cobra/clap/click)
+  sora anxious --path <abs-path-in-box> --as <name> --box <box>
+                                   export a binary that is NOT in the box's
+                                   PATH (e.g. /opt/vendor/tool), under a name
+                                   you choose
   sora anxious --list
   sora anxious --remove <command>
 

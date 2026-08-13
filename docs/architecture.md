@@ -70,6 +70,8 @@ at the same absolute path, so in-box hooks can call them directly:
 | `sora-which` | inside box, as user | `command -v` without shell-quoting games through `distrobox enter` |
 | `sora-capture-bash` | inside box, as user | ask the box's own bash for completion candidates (live delegation) |
 | `sora-desktop-scan` | inside box, as user | locate an app's `.desktop` and its icon files for `anxious --desktop`; prints **paths only**, so the host can `podman cp` them out — a binary icon would not survive command substitution |
+| `sora-json-path` | **host**, as user | read and rewrite exactly one top-level JSON string value, preserving every other byte. awk rather than jq/python3 because awk is already a hard dependency and those are not |
+| `sora-native-messaging` | inside box, as user | locate a browser signing helper's manifest, per browser family. Prints **paths only**, so the host can `podman cp` the file out byte-exact |
 | `sora-pkcs11` | inside box, as user | probe for `p11-kit remote`, and run `modutil` against the host's NSS database for `sora provide`. Exists because the modutil module spec is one argv element full of spaces, quotes and braces, and `distrobox-enter` rebuilds and re-splits the command line |
 
 Installed inside each box at creation time (root side):

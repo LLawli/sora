@@ -66,7 +66,7 @@ _sora() {
             return ;;
         --name|--comment|--generic-name|--icon|--keywords|--wmclass)
             return ;;   # free-form: whatever the user wants to read in the menu
-        --path|--as|--label)
+        --path|--as|--label|--browsers)
             # --path is a path INSIDE the box, so the host filesystem is the
             # wrong candidate list; offering nothing is deliberate, not a gap.
             return ;;
@@ -132,7 +132,7 @@ _sora() {
             ;;
         provide)
             if [ "$COMP_CWORD" -eq $((i + 1)) ]; then
-                mapfile -t COMPREPLY < <(compgen -W "pkcs11 list remove" -- "$cur")
+                mapfile -t COMPREPLY < <(compgen -W "pkcs11 native-messaging list remove" -- "$cur")
                 return
             fi
             case ${COMP_WORDS[i+1]} in
@@ -141,6 +141,12 @@ _sora() {
                         -*) mapfile -t COMPREPLY < <(compgen -W \
                                 "--box --label --no-nss" -- "$cur") ;;
                         *)  ;;   # a library path INSIDE the box: nothing to offer
+                    esac ;;
+                native-messaging)
+                    case $cur in
+                        -*) mapfile -t COMPREPLY < <(compgen -W \
+                                "--box --as --browsers" -- "$cur") ;;
+                        *)  ;;   # a manifest name from inside the box
                     esac ;;
                 remove)
                     mapfile -t COMPREPLY < <(compgen -W \

@@ -109,6 +109,7 @@ out=$(complete_bash sora "")
 assert_contains "$out" "provide" "bare 'sora ' lists provide"
 out=$(complete_bash sora provide "")
 assert_contains "$out" "pkcs11" "'sora provide' lists its subcommands"
+assert_contains "$out" "native-messaging" "'sora provide' lists the native-messaging adapter"
 assert_contains "$out" "remove" "'sora provide' lists remove"
 out=$(complete_bash sora provide pkcs11 -)
 assert_contains "$out" "--no-nss" "'provide pkcs11' offers its flags"
@@ -120,6 +121,13 @@ assert_not_contains "$out" "htop" "'provide remove' offers only provisions"
 # The library path is inside the box, so host candidates would be misleading.
 out=$(complete_bash sora provide pkcs11 --label "")
 assert_not_contains "$out" "htop" "--label does not fall back to command names"
+out=$(complete_bash sora provide native-messaging -)
+assert_contains "$out" "--browsers" "'provide native-messaging' offers its flags"
+assert_contains "$out" "--as" "'provide native-messaging' offers --as"
+out=$(complete_bash sora provide native-messaging --box "")
+assert_contains "$out" "alpha" "'provide native-messaging --box' offers box names"
+out=$(complete_bash sora provide native-messaging --browsers "")
+assert_not_contains "$out" "htop" "--browsers does not fall back to command names"
 
 # --- hook -------------------------------------------------------------------
 out=$(complete_bash sora hook "")
@@ -212,6 +220,15 @@ if command -v fish >/dev/null 2>&1; then
     assert_not_contains "$out" "CHANGELOG" "fish: --label must not fall back to filenames"
     out=$(fish_complete 'sora provide remove ')
     assert_contains "$out" "sora-gamma-tok" "fish: provide remove offers provisioned names"
+    out=$(fish_complete 'sora provide ')
+    assert_contains "$out" "native-messaging" "fish: the native-messaging adapter is offered"
+    out=$(fish_complete 'sora provide native-messaging --box ')
+    assert_contains "$out" "gamma" "fish: native-messaging --box offers box names"
+    assert_not_contains "$out" "CHANGELOG" "fish: --box must not fall back to filenames"
+    out=$(fish_complete 'sora provide native-messaging --as ')
+    assert_not_contains "$out" "CHANGELOG" "fish: --as must not fall back to filenames"
+    out=$(fish_complete 'sora provide native-messaging --browsers ')
+    assert_not_contains "$out" "CHANGELOG" "fish: --browsers must not fall back to filenames"
 fi
 
 # --- installed to the standard per-shell locations --------------------------

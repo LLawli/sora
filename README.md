@@ -288,6 +288,32 @@ database). That registration is a singleton: it is written once however many
 modules you publish, and removed when the last one goes. sora will not touch a
 p11-kit proxy it did not register.
 
+The second adapter covers the other half of the smartcard problem:
+
+```console
+$ sora provide native-messaging com.lacunasoftware.webpki --box adv-br
+```
+
+A browser signing helper is not a library loaded into the browser — it is a
+separate program the browser executes and talks to over stdin/stdout. So if it
+runs inside the box it uses the box's driver, and the host's browser only needs
+to know how to execute it. sora copies the manifest out of the box and rewrites
+**only** its `path` field to point at an exported wrapper; `allowed_origins`
+binds a manifest to a browser extension's ID and cannot be invented, which is
+why the file is copied rather than constructed. Every other byte is preserved,
+and that is verified before each file is put in place.
+
+**The two adapters solve different problems and you may well want both.**
+`pkcs11` is for *authentication* by certificate, where the browser itself loads
+the module (Projudi, eproc, the PJe login, gov.br). `native-messaging` is for
+*signing*, where a separate helper does the work.
+
+For a Flatpak browser sora writes a small `flatpak-spawn` shim inside the app's
+own config tree and points the manifest at that: a Flatpak browser executes the
+manifest's `path` **inside its sandbox**, where distrobox does not exist, so a
+bare host path silently never works. sora prints the one `flatpak override`
+command that shim needs and leaves running it to you.
+
 **What this cannot become.** Not "use any `.so` from the box". PKCS#11 is
 remotable by a happy accident of design — a stable, coarse function table with
 no callbacks and well-defined memory ownership — and even then somebody had to

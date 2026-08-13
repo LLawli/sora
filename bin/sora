@@ -2307,32 +2307,144 @@ nm_flatpak_app() { # dir -> app id
     esac
 }
 
+# Where a Flatpak browser's shim lives: inside the app's own config tree, which
+# is always readable from inside its sandbox without any filesystem grant.
+nm_flatpak_shim() { # manifest-dir host-name -> shim path
+    local app
+    app=$(nm_flatpak_app "$1") || return 1
+    printf '%s/.var/app/%s/config/sora/%s.sh\n' "$HOME" "$app" "$2"
+}
+
+# 'com.lacunasoftware.webpki' -> 'webpki-lacuna'.
+#
+# The last component names the tool and the vendor component disambiguates it,
+# which is the convention the reference implementation arrived at by hand to
+# avoid colliding with host binaries. A heuristic, which is why --as exists and
+# why both 'provide list' and 'doctor' always show the wrapper name.
+nm_wrapper_name() { # host-name
+    local last vendor rest
+    last=${1##*.}
+    rest=${1%.*}
+    vendor=${rest##*.}
+    # Corporate suffixes carry no information: lacunasoftware -> lacuna.
+    case $vendor in
+        *software) [ ${#vendor} -gt 11 ] && vendor=${vendor%software} ;;
+        *soft)     [ ${#vendor} -gt 7 ]  && vendor=${vendor%soft} ;;
+    esac
+    # A bare TLD is not a vendor ('com.webpki'), and a vendor that repeats the
+    # tool name adds nothing ('org.keepassxc.keepassxc_browser').
+    case $vendor in
+        com|org|net|br|io|dev|app|"$1") vendor='' ;;
+    esac
+    case $last in
+        "$vendor"*|*"$vendor") [ -n "$vendor" ] && vendor='' ;;
+    esac
+    [ -n "$vendor" ] && printf '%s-%s\n' "$last" "$vendor" || printf '%s\n' "$last"
+}
+
+# A manifest is OURS iff its path field points at the wrapper we created. Same
+# discipline as nss_ours(): ownership is derived from the file, never recorded,
+# so an undo can never touch something sora did not write.
+nm_is_ours() { # file wrapper
+    local p
+    p=$("$SORA_DATA/libexec/sora-json-path" get "$1" path 2>/dev/null) || return 1
+    case $p in
+        "$EXPORT_PATH/$2") return 0 ;;
+        "$HOME"/.var/app/*/config/sora/*) return 0 ;;   # a Flatpak shim of ours
+    esac
+    return 1
+}
+
+nm_count_installed() { # host-name wrapper -> how many of our manifests exist
+    local line dir f n=0
+    while IFS=$TAB read -r _ dir; do
+        [ -n "$dir" ] || continue
+        f="$dir/$1.json"
+        [ -f "$f" ] || continue
+        nm_is_ours "$f" "$2" && n=$((n + 1))
+    done <<EOF
+$(nm_manifest_dirs chromium; nm_manifest_dirs firefox)
+EOF
+    printf '%s\n' "$n"
+}
+
+# How many OTHER provisions share this wrapper. A wrapper only goes when its
+# last user does, exactly like the NSS registration.
+nm_wrapper_refcount() { # wrapper except-name
+    [ -f "$PROVIDE_REG" ] || { printf '0\n'; return 0; }
+    awk -F'\t' -v w="$1" -v x="$2" \
+        '$2 == "native-messaging" && $5 == w && $1 != x' "$PROVIDE_REG" | grep -c . || true
+}
+
+nm_remove_files() { # host-name wrapper
+    local kind dir f n=0 shim
+    while IFS=$TAB read -r kind dir; do
+        [ -n "$dir" ] || continue
+        f="$dir/$1.json"
+        [ -f "$f" ] || continue
+        if ! nm_is_ours "$f" "$2"; then
+            warn "left $f alone: it is not the manifest sora wrote"
+            continue
+        fi
+        rm -f "$f"
+        n=$((n + 1))
+        if [ "$kind" = flatpak ] && shim=$(nm_flatpak_shim "$dir" "$1"); then
+            [ -f "$shim" ] && rm -f "$shim"
+        fi
+    done <<EOF
+$(nm_manifest_dirs chromium; nm_manifest_dirs firefox)
+EOF
+    info "removed $n manifest(s) for '$1'"
+    return 0
+}
+
 provide_list() {
     local name kind box label nss target status
     if [ ! -s "$PROVIDE_REG" ]; then
-        info "nothing provided yet - try: sora provide pkcs11 <library> --box <box> --label <label>"
+        info "nothing provided yet - try one of:"
+        info "  sora provide pkcs11 <library> --box <box> --label <label>"
+        info "  sora provide native-messaging <host-name> --box <box>"
         return 0
     fi
-    printf '%-28s %-8s %-14s %-12s %-8s %s\n' NAME KIND BOX LABEL STATUS TARGET
+    printf '%-38s %-17s %-10s %-26s %-14s %-7s %s\n' \
+        NAME KIND BOX LABEL DETAIL STATUS TARGET
     while IFS=$TAB read -r name kind box label nss target; do
         [ -n "$name" ] || continue
         status=ok
-        [ -f "$(pkcs11_module_file "$name")" ] || status=NO-FILE
+        case $kind in
+            pkcs11) [ -f "$(pkcs11_module_file "$name")" ] || status=NO-FILE ;;
+            native-messaging)
+                [ -x "$EXPORT_PATH/$nss" ] || status=NO-WRAP
+                [ "$(nm_count_installed "$label" "$nss")" = 0 ] && status=NO-FILE ;;
+            *) status='?' ;;
+        esac
         container_exists "$box" || status=MISSING
-        printf '%-28s %-8s %-14s %-12s %-8s %s\n' \
-            "$name" "$kind" "$box" "$label" "$status" "$target"
+        # The DETAIL column is per-kind: nss/nonss for pkcs11, the wrapper
+        # name for native-messaging. A derived wrapper name should never be
+        # something the user has to guess at.
+        printf '%-38s %-17s %-10s %-26s %-14s %-7s %s\n' \
+            "$name" "$kind" "$box" "$label" "$nss" "$status" "$target"
     done < "$PROVIDE_REG"
 }
 
-provide_remove_one() { # name  -> removes the host file, not the registry row
-    local name=$1 file
-    file=$(pkcs11_module_file "$name")
-    [ -f "$file" ] && { rm -f "$file"; info "removed $file"; }
+# Removes the host-side files of one provision, not its registry row. An empty
+# kind means "the caller does not know", which is the orphan case and is still
+# pkcs11: a .module file is by definition one.
+provide_remove_one() { # name kind label detail
+    local name=$1 kind=${2:-} file
+    case $kind in
+        native-messaging) nm_remove_files "$3" "$4" ;;
+        pkcs11|'')
+            file=$(pkcs11_module_file "$name")
+            [ -f "$file" ] && { rm -f "$file"; info "removed $file"; }
+            ;;
+        *) warn "unknown provision kind '$kind' for '$name'; no host file was removed" ;;
+    esac
     return 0
 }
 
 cmd_provide_remove() {
-    local name=${1:?usage: sora provide remove <name>} row kind box nss
+    local name=${1:?usage: sora provide remove <name>} row kind box label nss
     row=$(provide_row "$name")
     # The file is removed whether or not a row exists: 'provide' writes the
     # file before the row, and an orphan file is exactly what that window
@@ -2347,9 +2459,10 @@ cmd_provide_remove() {
     fi
     kind=$(printf '%s' "$row" | cut -f2)
     box=$(printf '%s' "$row" | cut -f3)
+    label=$(printf '%s' "$row" | cut -f4)
     nss=$(printf '%s' "$row" | cut -f5)
 
-    provide_remove_one "$name"
+    provide_remove_one "$name" "$kind" "$label" "$nss"
     provide_write "$name" '' '' '' '' ''
     info "removed provision '$name'"
 
@@ -2360,6 +2473,21 @@ cmd_provide_remove() {
     if [ "$kind" = pkcs11 ] && [ "$nss" = nss ] &&
         [ "$(provide_count_kind pkcs11)" = 0 ]; then
         nss_unregister "$box"
+    fi
+
+    # The wrapper is shared the same way the NSS registration is, so it only
+    # goes with its last user. And anxious_remove DIES when there is no row for
+    # the command, which would abort this function, provide_purge_box, and
+    # therefore 'box rm' halfway - so the row is checked first.
+    if [ "$kind" = native-messaging ]; then
+        if [ "$(nm_wrapper_refcount "$nss" "$name")" != 0 ]; then
+            info "wrapper '$nss' still backs another provision; keeping it"
+        elif [ -f "$ANXIOUS_REG" ] &&
+            awk -F'\t' -v c="$nss" '$1 == c { found = 1 } END { exit !found }' "$ANXIOUS_REG"; then
+            anxious_remove "$nss"
+        else
+            warn "no anxious row for '$nss'; leaving $EXPORT_PATH/$nss alone"
+        fi
     fi
 }
 
@@ -2461,14 +2589,244 @@ cmd_provide_pkcs11() {
     return 0
 }
 
+# Write one manifest into one destination, rewriting ONLY the path field.
+#
+# The verification is the point. Setting the rewritten file back to its old
+# value has to reproduce the original byte for byte, which proves both that
+# exactly one span moved and that that span held the old path - so a rewrite
+# that targeted the wrong field cannot pass. allowed_origins binds the manifest
+# to a browser extension's ID, and losing it is not a thing we can detect later.
+nm_write_one() { # src dest-file new-path oldraw
+    local jp tmp back
+    jp="$SORA_DATA/libexec/sora-json-path"
+    tmp="$2.sora-tmp"
+    back="$2.sora-verify"
+    if ! SORA_JP_VAL="$3" "$jp" set "$1" path > "$tmp" 2>/dev/null; then
+        rm -f "$tmp"; return 1
+    fi
+    if ! SORA_JP_VAL="$4" "$jp" set "$tmp" path > "$back" 2>/dev/null ||
+        ! cmp -s "$1" "$back"; then
+        rm -f "$tmp" "$back"
+        return 1
+    fi
+    rm -f "$back"
+    cmp -s "$1" "$tmp" && { rm -f "$tmp"; return 1; }   # nothing changed
+    chmod 0644 "$tmp"
+    mv -f "$tmp" "$2"
+}
+
+cmd_provide_native_messaging() {
+    local hostname='' box='' as_name='' browsers='' wrapper name row jp
+    local family path found=0 dir kind dest src oldraw newpath written=0
+    local exbox exlabel other flat_hint='' shim app tmpdir
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --box|-b)   box=${2:?--box needs a value}; shift ;;
+            --as)       as_name=${2:?--as needs a value}; shift ;;
+            --browsers) browsers=${2:?--browsers needs a value}; shift ;;
+            -*)         die "unknown option for 'provide native-messaging': $1" ;;
+            *)          [ -z "$hostname" ] && hostname=$1 || die "unexpected argument: $1" ;;
+        esac
+        shift
+    done
+
+    [ -n "$hostname" ] || die "usage: sora provide native-messaging <host-name> --box <box>"
+    [ -n "$box" ] || die "--box is required (which box has the helper?)"
+    # Chromium's own rule for a native messaging host name, and it also has to
+    # be a safe filename: it becomes <host-name>.json.
+    case $hostname in
+        *[!a-z0-9_.]*) die "a native messaging host name may only contain [a-z0-9_.]" ;;
+        .*|*.|*..*)    die "a native messaging host name may not start, end or double up on '.'" ;;
+    esac
+
+    need_cmd distrobox
+    require_box "$box"
+    container_exists "$box" || die "container '$box' does not exist"
+
+    name=$(provide_name "$box" "$hostname")
+    row=$(provide_row "$name")
+    if [ -n "$row" ]; then
+        exbox=$(printf '%s' "$row" | cut -f3)
+        exlabel=$(printf '%s' "$row" | cut -f4)
+        if [ "$exbox" != "$box" ] || [ "$exlabel" != "$hostname" ]; then
+            die "the name '$name' is already used by box '$exbox' label '$exlabel'"
+        fi
+    fi
+    # Two boxes providing the same host-name derive DIFFERENT registry names but
+    # write the SAME <host-name>.json into the same profiles, so the second
+    # would silently overwrite the first. provide_name cannot see this.
+    other=$(awk -F'\t' -v l="$hostname" -v b="$box" \
+        '$2 == "native-messaging" && $4 == l && $3 != b { print $3; exit }' \
+        "$PROVIDE_REG" 2>/dev/null || true)
+    [ -n "$other" ] &&
+        die "box '$other' already provides '$hostname'; both write the same file into the same browser profiles"
+
+    ensure_libexec
+    jp="$SORA_DATA/libexec/sora-json-path"
+
+    local scan
+    scan=$(distrobox enter --name "$box" -- \
+        "$SORA_DATA/libexec/sora-native-messaging" find "$hostname" 2>/dev/null) || scan=''
+    if [ -z "$scan" ]; then
+        warn "'$hostname' has no native messaging manifest inside box '$box'"
+        distrobox enter --name "$box" -- \
+            "$SORA_DATA/libexec/sora-native-messaging" list 2>/dev/null |
+            while IFS=$TAB read -r _ n _; do
+                [ -n "$n" ] && warn "  the box does provide: $n"
+            done
+        die "nothing to publish for '$hostname'"
+    fi
+
+    tmpdir=$(mktemp -d)
+    local cm; cm=$(container_manager)
+    while IFS=$TAB read -r family path; do
+        [ -n "$family" ] || continue
+        "$cm" cp "$box:$path" "$tmpdir/$family.json" 2>/dev/null ||
+            die "could not copy $path out of box '$box'"
+        # The name field has to match the filename, or no browser will load it.
+        [ "$("$jp" get "$tmpdir/$family.json" name 2>/dev/null)" = "$hostname" ] ||
+            die "the manifest in '$box' declares a different name than '$hostname'"
+        oldraw=$("$jp" get-raw "$tmpdir/$family.json" path 2>/dev/null) ||
+            die "the manifest in '$box' has no usable path field"
+        found=1
+    done <<EOF
+$scan
+EOF
+    [ "$found" = 1 ] || die "nothing to publish for '$hostname'"
+
+    src=$(printf '%s\n' "$scan" | head -n1 | cut -f2)
+    local binpath
+    binpath=$("$jp" get "$tmpdir/$(printf '%s\n' "$scan" | head -n1 | cut -f1).json" path) ||
+        die "could not read the path field"
+    # A box sharing the host's home can see sora's own output; publishing that
+    # would point a wrapper at itself.
+    case $binpath in
+        "$EXPORT_PATH"/*)
+            die "that manifest already points at $binpath, which is sora's own wrapper (a box sharing the host home sees it)" ;;
+    esac
+
+    wrapper=${as_name:-$(nm_wrapper_name "$hostname")}
+    case $wrapper in
+        *[!A-Za-z0-9._+-]*) die "the wrapper name '$wrapper' is not a valid command name; pass --as" ;;
+    esac
+    other=$(awk -F'\t' -v w="$wrapper" -v n="$name" -v t="$binpath" \
+        '$2 == "native-messaging" && $5 == w && $1 != n && $6 != t { print $1; exit }' \
+        "$PROVIDE_REG" 2>/dev/null || true)
+    [ -n "$other" ] &&
+        die "provision '$other' already uses the wrapper '$wrapper' for a different binary; pass --as"
+    # The wrapper path is spliced into JSON without escaping, so it may not
+    # contain anything that would need it.
+    case "$EXPORT_PATH/$wrapper" in
+        *[\"\\]*|*[[:cntrl:]]*) die "the path to $EXPORT_PATH contains a character that cannot go into JSON" ;;
+    esac
+
+    # Nothing has been written yet, so the export refusing to shadow a host
+    # binary aborts cleanly. That refusal is deliberate here: a signing helper
+    # has no business shadowing anything, so --force is not plumbed through.
+    cmd_anxious --path "$binpath" --as "$wrapper" --box "$box"
+    newpath="$EXPORT_PATH/$wrapper"
+
+    # The row before the manifests, the opposite order from pkcs11 and for a
+    # reason: a row with no files is recoverable with 'provide remove', while a
+    # manifest with no row is not, because sora-<box>-<label> cannot be split
+    # back apart when both halves may contain '-'.
+    provide_write "$name" native-messaging "$box" "$hostname" "$wrapper" "$binpath"
+
+    while IFS=$TAB read -r family path; do
+        [ -n "$family" ] || continue
+        src="$tmpdir/$family.json"
+        oldraw=$("$jp" get-raw "$src" path)
+        while IFS=$TAB read -r kind dir; do
+            [ -n "$dir" ] || continue
+            [ -n "$browsers" ] && ! nm_browser_wanted "$dir" "$browsers" && continue
+            dest="$dir/$hostname.json"
+            mkdir -p "$dir" 2>/dev/null || { warn "cannot create $dir"; continue; }
+            if [ -f "$dest" ] && ! nm_is_ours "$dest" "$wrapper"; then
+                nm_backup_foreign "$dest"
+            fi
+            if [ "$kind" = flatpak ]; then
+                # A Flatpak browser execs the manifest's path INSIDE its
+                # sandbox, where distrobox does not exist. It gets a shim in the
+                # app's own config tree, which is readable there without any
+                # filesystem grant.
+                shim=$(nm_flatpak_shim "$dir" "$hostname") || continue
+                mkdir -p "$(dirname "$shim")"
+                printf '#!/bin/sh\n# Generated by sora. Removed by: sora provide remove %s\nexec flatpak-spawn --host %s "$@"\n' \
+                    "$name" "$newpath" > "$shim"
+                chmod 0755 "$shim"
+                if nm_write_one "$src" "$dest" "$shim" "$oldraw"; then
+                    written=$((written + 1))
+                    app=$(nm_flatpak_app "$dir") &&
+                        flat_hint="$flat_hint$app$TAB"
+                else
+                    warn "could not write $dest"
+                fi
+            elif nm_write_one "$src" "$dest" "$newpath" "$oldraw"; then
+                written=$((written + 1))
+                info "wrote $dest"
+            else
+                warn "could not write $dest"
+            fi
+        done <<EOF2
+$(nm_manifest_dirs "$family")
+EOF2
+    done <<EOF
+$scan
+EOF
+    rm -rf "$tmpdir"
+
+    if [ "$written" = 0 ]; then
+        provide_write "$name" '' '' '' '' ''
+        anxious_remove "$wrapper" >/dev/null 2>&1 || true
+        die "no browser profile could be written; nothing was left behind"
+    fi
+
+    info "published '$hostname' from '$box' into $written browser profile(s) via $newpath"
+    if [ -n "$flat_hint" ]; then
+        printf '%s' "$flat_hint" | tr "$TAB" '\n' | sort -u | while read -r app; do
+            [ -n "$app" ] || continue
+            info "for the Flatpak browser $app, run:"
+            info "  flatpak override --user --talk-name=org.freedesktop.Flatpak $app"
+        done
+    fi
+    info "restart the browser for it to pick up the manifest"
+    return 0
+}
+
+# --browsers takes profile keys ('brave', 'firefox', 'chromium'); a directory
+# matches when its path contains one, case-insensitively (Brave's directory is
+# capitalised, nobody types it that way).
+nm_browser_wanted() { # dir list -> 0 if this directory should be written
+    local want lower
+    lower=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    local IFS=','
+    for want in $2; do
+        [ -n "$want" ] || continue
+        want=$(printf '%s' "$want" | tr '[:upper:]' '[:lower:]')
+        case $lower in *"$want"*) return 0 ;; esac
+    done
+    return 1
+}
+
+nm_backup_foreign() { # file
+    local dest
+    dest="$SORA_CACHE/native-messaging"
+    mkdir -p "$dest"
+    dest="$dest/${1##*/}.$(date -u +%Y%m%dT%H%M%SZ)"
+    cp -f "$1" "$dest" 2>/dev/null || return 1
+    warn "a manifest that sora did not write was already at $1"
+    warn "backed it up to $dest; 'provide remove' will NOT restore it"
+}
+
 cmd_provide() {
     local sub=${1:-}
     [ -n "$sub" ] && shift || true
     case $sub in
         pkcs11)             cmd_provide_pkcs11 "$@" ;;
+        native-messaging)   cmd_provide_native_messaging "$@" ;;
         list|--list|-l)     provide_list ;;
         remove|--remove|-r) cmd_provide_remove "$@" ;;
-        *) die "usage: sora provide <pkcs11 <library> --box <box> --label <label>|list|remove <name>>" ;;
+        *) die "usage: sora provide <pkcs11 <library> --box <box> --label <label>|native-messaging <host-name> --box <box>|list|remove <name>>" ;;
     esac
 }
 
@@ -2830,6 +3188,19 @@ cmd_doctor() {
                     [ -n "$dbx" ] && [ ! -x "$dbx" ] &&
                         bad "provision '$pname' points at a missing distrobox ($dbx); re-run: sora provide pkcs11 $ptarget --box $pbox --label $plabel"
                     ;;
+                native-messaging)
+                    if [ ! -x "$EXPORT_PATH/$pdetail" ]; then
+                        bad "provision '$pname' has no wrapper at $EXPORT_PATH/$pdetail; the browsers point at a missing file"
+                    elif [ "$(nm_count_installed "$plabel" "$pdetail")" = 0 ]; then
+                        bad "provision '$pname' has no manifest in any browser profile; re-run: sora provide native-messaging $plabel --box $pbox"
+                    fi
+                    # The exported wrapper runs 'distrobox-enter' by bare name,
+                    # so a distrobox outside the session PATH (Homebrew, or
+                    # ~/.local) breaks it silently: the extension simply reports
+                    # the host as not installed.
+                    PATH=/usr/bin:/bin command -v distrobox-enter >/dev/null 2>&1 ||
+                        bad "distrobox-enter is not on a login PATH; browser-launched wrappers for '$pname' will fail silently"
+                    ;;
                 *)  bad "provision '$pname' has an unknown kind '$pkind'; this sora is older than the provision" ;;
             esac
         done < "$PROVIDE_REG"
@@ -2936,6 +3307,12 @@ Publish a box resource to the host
                                    usable by the host's browsers. Writes a
                                    p11-kit module file and registers the host's
                                    p11-kit-proxy.so in ~/.pki/nssdb.
+  sora provide native-messaging <host-name> --box <box> [--as <name>]
+                                   [--browsers <list>]
+                                   a browser signing helper that lives in a
+                                   box, usable by the host's browsers. Copies
+                                   the manifest out and repoints it at an
+                                   exported wrapper.
   sora provide list
   sora provide remove <name>
 

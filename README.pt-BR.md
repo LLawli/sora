@@ -291,6 +291,35 @@ registro é singleton: é escrito uma vez só, não importa quantos módulos voc
 publique, e é removido quando o último sai. O sora não mexe em proxy do p11-kit
 que ele não registrou.
 
+O segundo adaptador cobre a outra metade do problema do token:
+
+```console
+$ sora provide native-messaging com.lacunasoftware.webpki --box adv-br
+```
+
+Um assinador de navegador não é biblioteca carregada no navegador: é um
+programa separado que o navegador executa e com quem conversa por
+stdin/stdout. Então se ele roda dentro da box, usa o driver de lá, e ao
+navegador do host basta saber como executá-lo. O sora copia o manifesto de
+dentro da box e reescreve **só** o campo `path` para apontar para um wrapper
+exportado; o `allowed_origins` amarra o manifesto no ID da extensão e não pode
+ser inventado, e é por isso que o arquivo é copiado e não construído. Todo o
+resto é preservado byte a byte, e isso é verificado antes de cada arquivo
+entrar no lugar.
+
+**Os dois adaptadores resolvem problemas diferentes e você provavelmente quer
+os dois.** O `pkcs11` é para *autenticação* por certificado, em que o próprio
+navegador carrega o módulo (Projudi, eproc, login do PJe, gov.br). O
+`native-messaging` é para *assinatura*, em que quem trabalha é um programa
+separado.
+
+Para navegador Flatpak o sora escreve um shim com `flatpak-spawn` dentro da
+árvore de config do próprio app e aponta o manifesto para ele: navegador
+Flatpak executa o `path` **dentro do sandbox**, onde o distrobox não existe,
+então caminho de host pelado simplesmente nunca funciona. O sora imprime o
+único comando `flatpak override` de que esse shim precisa e deixa a execução
+com você.
+
 **No que isso não pode virar.** Não vira "usar qualquer `.so` da box". O
 PKCS#11 é remotável por um acidente feliz de projeto (tabela de funções estável
 e de granularidade grossa, sem callbacks, com propriedade de memória definida)

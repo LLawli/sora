@@ -77,25 +77,6 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
   helper was needed: `command -v` already echoes an absolute path back iff it
   is executable, which is the same question `sora-which` was answering.
 
-- `sora anxious` now refuses an export that would shadow a host binary, with
-  `--force` to do it deliberately. "Host binaries always win" is the project's
-  headline claim and it is *structural* for late resolution (the hook fires
-  only after `PATH` already missed), but nothing enforced it for eager export,
-  which writes a real file into `~/.local/bin` — usually ahead of `/usr/bin`.
-  The check is free and runs before any container is touched. Re-exporting an
-  existing export is still idempotent: sora's own wrapper is not a conflict.
-
-### Fixed
-
-- `sora anxious --remove` no longer risks deleting an unrelated wrapper.
-  `distrobox-export --delete` derives its target from the *binary* name, so
-  for a wrapper renamed with `--as` it would have gone after
-  `~/.local/bin/<binary>` — potentially another command's export. Whether a
-  rename happened is derived from the two names the registry already carries,
-  so the on-disk format is unchanged.
-
-### Added
-
 - `sora anxious --desktop <cmd> --box <box>` writes a `.desktop` entry for a
   graphical app in a box, asking only for what it cannot read off the box.
   Defaults are seeded from the app's own entry inside the container, so a
@@ -126,10 +107,33 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ### Changed
 
+- `sora anxious` now refuses an export that would shadow a host binary, with
+  `--force` to do it deliberately. "Host binaries always win" is the project's
+  headline claim and it is *structural* for late resolution (the hook fires
+  only after `PATH` already missed), but nothing enforced it for eager export,
+  which writes a real file into `~/.local/bin` — usually ahead of `/usr/bin`.
+  The check is free and runs before any container is touched. Re-exporting an
+  existing export is still idempotent: sora's own wrapper is not a conflict.
+
 - `sora anxious --remove` now also removes the desktop entry and every icon it
   imported, and `sora box rm` does the same for every command that box
   provided: a launcher pointing into a deleted container is worse than no
   launcher.
+
+### Fixed
+
+- `sora anxious --remove` no longer risks deleting an unrelated wrapper.
+  `distrobox-export --delete` derives its target from the *binary* name, so
+  for a wrapper renamed with `--as` it would have gone after
+  `~/.local/bin/<binary>` — potentially another command's export. Whether a
+  rename happened is derived from the two names the registry already carries,
+  so the on-disk format is unchanged.
+
+- `sora doctor` no longer judges every provision against a PKCS#11 module
+  file. It discarded the registry's `kind` column, so a provision of any other
+  kind was reported as broken with advice to `sora provide remove` it — which
+  would have destroyed a working provision. The p11-kit host check is likewise
+  gated on there actually being a pkcs11 provision.
 
 ## [0.2.1] - 2026-08-11
 

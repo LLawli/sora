@@ -109,7 +109,7 @@ _sora() {
                         '*:command:_sora_indexed' ;;
                 provide)
                     if (( CURRENT == 2 )); then
-                        _values 'provide command' pkcs11 list remove
+                        _values 'provide command' pkcs11 native-messaging list remove
                     else
                         case $words[2] in
                             pkcs11) _arguments \
@@ -117,6 +117,12 @@ _sora() {
                                 '--label[short handle for this module]:label:' \
                                 '--no-nss[skip the ~/.pki/nssdb registration]' \
                                 '*:library inside the box:' ;;
+                            native-messaging) _arguments \
+                                '--box[which box has the helper]:box:_sora_boxes' \
+                                '--as[export the helper under this name]:name:' \
+                                '--browsers[only these browser profiles]:browsers:' \
+                                '*--extension-id[also allow this extension id]:id:' \
+                                '*:native messaging host name:' ;;
                             remove) _sora_registry provide.list ;;
                         esac
                     fi ;;

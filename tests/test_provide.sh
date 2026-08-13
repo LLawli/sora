@@ -269,6 +269,29 @@ out=$("$SORA_BIN" doctor 2>&1 || true)
 assert_contains "$out" "orphan module file" "doctor flags a module file with no registry row"
 rm -f "$MODULES/sora-orphan.module"
 
+# --- doctor must read the kind column, not assume pkcs11 ---------------------
+# A row of another kind keeps its own meaning in columns 5 and 6. Reading every
+# row as pkcs11 reported a perfectly good provision as broken and advised a
+# 'remove' that would have destroyed it.
+cp "$REG" "$SANDBOX/reg.bak"
+printf 'sora-advbr-com.example.helper\tsomekind\tadvbr\tcom.example.helper\twrapper-name\t/opt/x/helper\n' \
+    >> "$REG"
+out=$("$SORA_BIN" doctor 2>&1 || true)
+assert_not_contains "$out" "sora-advbr-com.example.helper' has no module file" \
+    "a row of another kind is not judged against a .module file"
+assert_contains "$out" "unknown kind 'somekind'" "an unrecognised kind is named as such"
+cp "$SANDBOX/reg.bak" "$REG"
+
+# The p11-kit host check must not fire for a host with no pkcs11 provision at
+# all: it would be crying wolf on the one command people run when something is
+# already wrong.
+printf 'sora-advbr-com.example.helper\tsomekind\tadvbr\tcom.example.helper\twrapper-name\t/opt/x/helper\n' \
+    > "$REG"
+out=$("$SORA_BIN" doctor 2>&1 || true)
+assert_not_contains "$out" "p11-kit is not installed on the host" \
+    "no pkcs11 provision, no p11-kit complaint"
+cp "$SANDBOX/reg.bak" "$REG"
+
 # --- box rm must undo BEFORE the container is destroyed ----------------------
 : > "$ORDER"
 rm -rf "$NSSDB"

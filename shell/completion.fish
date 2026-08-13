@@ -132,14 +132,22 @@ complete -c sora -n '__fish_seen_subcommand_from anxious' -l detect-wmclass -d '
 complete -c sora -n '__fish_seen_subcommand_from anxious' -l no-prompt -d 'Take defaults, never ask'
 
 # provide
-complete -c sora -n '__fish_seen_subcommand_from provide; and not __fish_seen_subcommand_from pkcs11 list remove' \
-    -a 'pkcs11 list remove'
+complete -c sora -n '__fish_seen_subcommand_from provide; and not __fish_seen_subcommand_from pkcs11 native-messaging list remove' \
+    -a 'pkcs11 native-messaging list remove'
 complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from pkcs11' \
     -l box -x -a '(__sora_boxes)' -d 'Which box has the driver'
 complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from pkcs11' \
     -l label -x -d 'Short handle for this module'
 complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from pkcs11' \
     -l no-nss -d 'Skip the ~/.pki/nssdb registration'
+complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from native-messaging' \
+    -l box -x -a '(__sora_boxes)' -d 'Which box has the helper'
+complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from native-messaging' \
+    -l as -x -d 'Export the helper under this name'
+complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from native-messaging' \
+    -l browsers -x -d 'Only these browser profiles'
+complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from native-messaging' \
+    -l extension-id -x -d 'Also allow this extension id'
 complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from remove' \
     -a '(__sora_registry provide.list)'
 

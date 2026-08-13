@@ -2,12 +2,22 @@
 
 **Status: partly implemented.**
 
-- **Done:** the `sora provide` mechanism and the PKCS#11 adapter, plus both
-  prerequisites listed below (`anxious --path/--as`, and the refusal to shadow
-  a host binary).
-- **Not done:** the native-messaging adapter. Everything this document says
-  about it still stands as a proposal, including the warning that it is the
-  one adapter that is *not* a twenty-line template.
+- **Done:** the `sora provide` mechanism, the PKCS#11 adapter, the
+  native-messaging adapter, and both prerequisites listed below
+  (`anxious --path/--as`, and the refusal to shadow a host binary).
+- **Not done:** synthesising a manifest for a helper the box ships without one
+  at all (a tarball install). `--extension-id` covers the adjacent case, a
+  sideloaded extension whose ID the vendor's manifest does not list.
+
+Two things this document got wrong, both found by building it:
+
+- **Flatpak browsers need a shim, not a filesystem grant.** A Flatpak browser
+  executes the manifest's `path` *inside its sandbox*, where distrobox does not
+  exist. sora writes a `flatpak-spawn` shim into the app's own config tree and
+  points the manifest at that.
+- **The estimate below is right, and worse than stated.** The adapter also had
+  to grow a JSON editor, because the manifest must be rewritten with exactly
+  one field changed and the project has no JSON tooling.
 
 The rest of the document is kept as written: it is the record of the evidence
 behind the design, from two working reference implementations measured on real

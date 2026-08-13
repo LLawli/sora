@@ -94,7 +94,7 @@ assert_contains "$content" 'libdnf5-plugin-actions' \
 # --- helper scripts ---------------------------------------------------------
 # These run INSIDE a box, under whatever /bin/sh that distro ships, so bashisms
 # here fail on someone else's machine and never on ours.
-for t in detect-pm which desktop-scan pkcs11; do
+for t in detect-pm which desktop-scan pkcs11 json-path native-messaging; do
     "$SORA_BIN" _template "$t" > "$SANDBOX/$t"
     sh -n "$SANDBOX/$t" || fail "$t: generated script fails sh -n"
 done
@@ -125,5 +125,21 @@ sh "$SANDBOX/pkcs11" >/dev/null 2>&1 &&
     fail "pkcs11 must reject being called with no arguments"
 sh "$SANDBOX/pkcs11" check >/dev/null 2>&1 &&
     fail "pkcs11 check must reject a missing library argument"
+
+# sora-json-path is the one generated helper that runs on the HOST. Its own
+# behaviour is covered by tests/test_json_path.sh; here it only has to be
+# well-formed and free of generator leakage.
+#
+# The usual '$SORA_' leak check cannot be used verbatim here: $SORA_JP_VAL is
+# unexpanded ON PURPOSE, being the runtime environment variable the script
+# reads. So the generator's own variables are named instead.
+content=$("$SORA_BIN" _template json-path)
+for v in '$SORA_DATA' '$SORA_CONFIG' '$SORA_CACHE' '$SORA_VERSION' '$SORA_SHARE'; do
+    assert_not_contains "$content" "$v" "json-path: $v must not leak into the generated script"
+done
+assert_contains "$content" 'ENVIRON["SORA_JP_VAL"]' \
+    "json-path: the new value arrives via the environment, never awk -v"
+sh "$SANDBOX/json-path" >/dev/null 2>&1 &&
+    fail "json-path must reject being called with no arguments"
 
 echo "ok: templates"

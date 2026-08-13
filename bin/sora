@@ -2528,25 +2528,41 @@ cmd_doctor() {
     # abort the process doing it, and doctor is the command people run when
     # things are already broken.
     if [ -s "$PROVIDE_REG" ]; then
-        local pname pbox plabel pnss ptarget pfile dbx wants_nss=0 f
-        nss_proxy_lib >/dev/null 2>&1 ||
-            bad "p11-kit is not installed on the host; the files in $PKCS11_MODULES_DIR are read by nothing"
-        while IFS=$TAB read -r pname _ pbox plabel pnss ptarget; do
+        local pname pkind pbox plabel pdetail ptarget pfile dbx wants_nss=0 f
+        # Gated on there actually being a pkcs11 row: a host that only ever
+        # used another adapter has no reason to install p11-kit, and telling it
+        # otherwise is crying wolf on the command people run when something is
+        # already wrong.
+        if [ "$(provide_count_kind pkcs11)" != 0 ]; then
+            nss_proxy_lib >/dev/null 2>&1 ||
+                bad "p11-kit is not installed on the host; the files in $PKCS11_MODULES_DIR are read by nothing"
+        fi
+        # Column 5 is a per-kind detail and column 2 says how to read it, so
+        # the kind has to be dispatched on rather than discarded. Reading every
+        # row as pkcs11 reported perfectly good provisions of another kind as
+        # broken, and advised a 'remove' that would have destroyed them.
+        while IFS=$TAB read -r pname pkind pbox plabel pdetail ptarget; do
             [ -n "$pname" ] || continue
-            [ "$pnss" = nss ] && wants_nss=1
-            pfile=$(pkcs11_module_file "$pname")
-            if [ ! -f "$pfile" ]; then
-                bad "provision '$pname' has no module file; run 'sora provide remove $pname'"
-                continue
-            fi
             container_exists "$pbox" ||
                 bad "provision '$pname' targets box '$pbox', whose container is MISSING"
-            # The absolute distrobox path is pinned inside the file, so a
-            # Homebrew upgrade that moves it breaks the module silently. The
-            # registry carries every argument needed to print the fix.
-            dbx=$(sed -n 's/^remote: |\([^ ]*\) .*/\1/p' "$pfile")
-            [ -n "$dbx" ] && [ ! -x "$dbx" ] &&
-                bad "provision '$pname' points at a missing distrobox ($dbx); re-run: sora provide pkcs11 $ptarget --box $pbox --label $plabel"
+            case $pkind in
+                pkcs11)
+                    [ "$pdetail" = nss ] && wants_nss=1
+                    pfile=$(pkcs11_module_file "$pname")
+                    if [ ! -f "$pfile" ]; then
+                        bad "provision '$pname' has no module file; run 'sora provide remove $pname'"
+                        continue
+                    fi
+                    # The absolute distrobox path is pinned inside the file, so
+                    # a Homebrew upgrade that moves it breaks the module
+                    # silently. The registry carries every argument needed to
+                    # print the fix.
+                    dbx=$(sed -n 's/^remote: |\([^ ]*\) .*/\1/p' "$pfile")
+                    [ -n "$dbx" ] && [ ! -x "$dbx" ] &&
+                        bad "provision '$pname' points at a missing distrobox ($dbx); re-run: sora provide pkcs11 $ptarget --box $pbox --label $plabel"
+                    ;;
+                *)  bad "provision '$pname' has an unknown kind '$pkind'; this sora is older than the provision" ;;
+            esac
         done < "$PROVIDE_REG"
         for f in "$PKCS11_MODULES_DIR"/sora-*.module; do
             [ -f "$f" ] || continue

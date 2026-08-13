@@ -94,7 +94,7 @@ assert_contains "$content" 'libdnf5-plugin-actions' \
 # --- helper scripts ---------------------------------------------------------
 # These run INSIDE a box, under whatever /bin/sh that distro ships, so bashisms
 # here fail on someone else's machine and never on ours.
-for t in detect-pm which desktop-scan; do
+for t in detect-pm which desktop-scan pkcs11; do
     "$SORA_BIN" _template "$t" > "$SANDBOX/$t"
     sh -n "$SANDBOX/$t" || fail "$t: generated script fails sh -n"
 done
@@ -105,5 +105,25 @@ sh "$SANDBOX/desktop-scan" >/dev/null 2>&1 &&
     fail "desktop-scan must reject being called with no arguments"
 sh "$SANDBOX/desktop-scan" entry >/dev/null 2>&1 &&
     fail "desktop-scan must reject a mode with no argument"
+
+# sora-pkcs11 carries four properties that are each a real incident if lost.
+content=$("$SORA_BIN" _template pkcs11)
+# The -add check has to look at what the script DOES, not at what it says: the
+# comment explaining why -add is forbidden contains the word.
+code=$(printf '%s\n' "$content" | grep -v '^[[:space:]]*#')
+assert_contains "$content" 'ulimit -c 0' \
+    "pkcs11: cores disabled (a PKCS#11 driver may SIGSEGV whatever loads it)"
+assert_contains "$code" '-rawadd' "pkcs11: registration uses -rawadd"
+assert_not_contains "$code" ' -add ' \
+    "pkcs11: -add must never be invoked; it LOADS a foreign-ABI library"
+assert_contains "$code" '-force' "pkcs11: modutil is never allowed to prompt"
+assert_contains "$code" '< /dev/null' "pkcs11: modutil never reads from the terminal"
+assert_not_contains "$code" 'pkill' \
+    "pkcs11: the PID namespace is shared with the host, so pkill kills host processes"
+assert_not_contains "$content" '$SORA_' "pkcs11: no unexpanded generator variables"
+sh "$SANDBOX/pkcs11" >/dev/null 2>&1 &&
+    fail "pkcs11 must reject being called with no arguments"
+sh "$SANDBOX/pkcs11" check >/dev/null 2>&1 &&
+    fail "pkcs11 check must reject a missing library argument"
 
 echo "ok: templates"

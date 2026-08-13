@@ -42,6 +42,7 @@ _sora() {
         'pin:force a command to resolve to one box'
         'which:how a command would resolve'
         'anxious:export a real wrapper into PATH'
+        'provide:publish a box resource at a host integration point'
         'completion:tab completion wiring'
         'hook:shell hook installation'
         'doctor:sanity-check the setup'
@@ -88,6 +89,9 @@ _sora() {
                         '--box[which box provides it]:box:_sora_boxes' \
                         '--list[list exported wrappers]' \
                         "--remove[remove an exported wrapper]:command:{_sora_registry anxious.list}" \
+                        '--path[absolute path to a binary INSIDE the box]:path:' \
+                        '--as[export it under this name]:name:' \
+                        '--force[shadow a host binary of the same name]' \
                         '--desktop[also write a .desktop entry for a GUI app]' \
                         '--name[name shown in the menu]:name:' \
                         '--generic-name[generic name, e.g. Web Browser]:generic name:' \
@@ -103,6 +107,19 @@ _sora() {
                         '--detect-wmclass[start the app once to read its window class]' \
                         '--no-prompt[take defaults, never ask]' \
                         '*:command:_sora_indexed' ;;
+                provide)
+                    if (( CURRENT == 2 )); then
+                        _values 'provide command' pkcs11 list remove
+                    else
+                        case $words[2] in
+                            pkcs11) _arguments \
+                                '--box[which box has the driver]:box:_sora_boxes' \
+                                '--label[short handle for this module]:label:' \
+                                '--no-nss[skip the ~/.pki/nssdb registration]' \
+                                '*:library inside the box:' ;;
+                            remove) _sora_registry provide.list ;;
+                        esac
+                    fi ;;
                 completion)
                     if (( CURRENT == 2 )); then
                         _values 'completion command' delegate list remove status

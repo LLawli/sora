@@ -70,6 +70,7 @@ at the same absolute path, so in-box hooks can call them directly:
 | `sora-which` | inside box, as user | `command -v` without shell-quoting games through `distrobox enter` |
 | `sora-capture-bash` | inside box, as user | ask the box's own bash for completion candidates (live delegation) |
 | `sora-desktop-scan` | inside box, as user | locate an app's `.desktop` and its icon files for `anxious --desktop`; prints **paths only**, so the host can `podman cp` them out — a binary icon would not survive command substitution |
+| `sora-pkcs11` | inside box, as user | probe for `p11-kit remote`, and run `modutil` against the host's NSS database for `sora provide`. Exists because the modutil module spec is one argv element full of spaces, quotes and braces, and `distrobox-enter` rebuilds and re-splits the command line |
 
 Installed inside each box at creation time (root side):
 
@@ -108,6 +109,18 @@ These cost real debugging. Treat them as rules, not suggestions:
    on the generated content and execute it (`tests/test_templates.sh`).
 6. **Never put "distrobox" in the pacman hook filename.** distrobox deletes
    libalpm hooks matching `*distrobox*` inside its containers.
+7. **The PID namespace is shared with the host.** A `pkill -f <pattern>` run
+   inside a box kills matching *host* processes — including the very shell
+   whose command line contains that pattern, which is how the pattern usually
+   gets there. Any stop routine must match by PID. This cost two sessions
+   during the PKCS#11 work; `tests/test_templates.sh` now asserts that no
+   generated in-box script contains `pkill` at all.
+8. **A PKCS#11 driver may abort whatever loads it.** SerproID's
+   `libneoidp11.so` SIGSEGVs the loading process unless its own application is
+   authenticated, and `p11-kit list-modules` loads every module. So module
+   verification is advisory, runs in a subshell with `ulimit -c 0`, and
+   `sora doctor` never does it at all — doctor is what people run when things
+   are *already* broken.
 
 ## Shell hooks and chaining
 

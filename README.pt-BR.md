@@ -77,7 +77,7 @@ território do outro:
 | Tab completion | sim, veja abaixo (bash e zsh; fish reduzido) | sim, mais o gerador da própria ferramenta |
 | Cobertura | todos os binários da box, automático | um comando por vez, explícito |
 | Poluição do PATH | nenhuma | um arquivo por comando exportado |
-| Precedência do host | estrutural (gancho só dispara após o PATH falhar) | depende da ordem do PATH |
+| Precedência do host | estrutural (gancho só dispara após o PATH falhar) | imposta: export que sombrearia binário do host é recusado |
 
 **Por que não simplesmente exportar tudo?** Uma box tem milhares de binários.
 Exportar todos inunda o PATH e o tab completion, inverte a precedência em
@@ -158,6 +158,33 @@ Gerenciadores de pacotes são o caso de uso principal do modo ansioso
 justamente porque são invocados de scripts e de contextos onde a resolução
 tardia não vale.
 
+**Exportar algo que não está no PATH da box.** Binário de integração quase
+nunca está: ferramenta de fornecedor cai em `/opt`, e o `anxious` resolve
+*nome* de comando. O `--path` pega o binário direto e o `--as` dá o nome do
+export:
+
+```console
+$ sora anxious --path /opt/lacuna-webpki/webpki --as webpki-lacuna --box adv-br
+```
+
+O `--as` funciona sozinho também, quando o nome que a box dá para algo não é o
+nome que você quer no host.
+
+**Export que sombrearia binário do host é recusado.** "O host sempre vence" é
+*estrutural* na resolução tardia (o gancho só dispara depois que o PATH já
+falhou), mas a exportação ansiosa escreve arquivo de verdade em `~/.local/bin`,
+que costuma vir antes de `/usr/bin`. Então o sora confere antes e para:
+
+```console
+$ sora anxious fd --box archbox
+sora: warning: 'fd' already exists on the host: /usr/bin/fd
+sora: warning: ~/.local/bin usually precedes /usr/bin, so this export would shadow it
+sora: warning: pick another name with --as, or pass --force to shadow it deliberately
+sora: error: refusing to shadow a host binary
+```
+
+A checagem não custa nada e roda antes de qualquer container ser tocado.
+
 ### `sora anxious --desktop` — apps gráficos no menu
 
 Um app gráfico dentro de um box precisa de mais que um wrapper: precisa de um
@@ -226,6 +253,54 @@ descobrir a classe e passar `--wmclass`.
 O `sora anxious --remove <cmd>` leva junto a entrada e todos os ícones
 importados, e o `sora box rm` faz o mesmo para tudo que aquele box fornecia:
 um lançador apontando para container removido é pior que lançador nenhum.
+
+### `sora provide` — publicar um recurso da box para o host
+
+Boa parte do que se quer de uma box nunca é digitada por ninguém: é procurada
+por um programa do host num ponto de integração próprio. O NSS procurando um
+módulo PKCS#11, o navegador procurando um assinador, o desktop procurando um
+handler de MIME. A forma é sempre a mesma (um arquivo de configuração do host
+cujo campo "execute isto" aponta para algo que entra na box) e só o formato do
+arquivo muda. O `anxious --desktop` é o primeiro adaptador dessa forma; o
+`provide` é a forma geral.
+
+Hoje ele implementa PKCS#11: driver de token/cartão instalado **só dentro da
+box**, usável pelos navegadores do host.
+
+```console
+$ sora provide pkcs11 /usr/lib/libaetpkss.so --box adv-br --label safesign
+sora: wrote ~/.config/pkcs11/modules/sora-adv-br-safesign.module
+sora: registered /usr/lib64/p11-kit-proxy.so in ~/.pki/nssdb as sora-p11-kit-proxy
+sora: the host's p11-kit sees module 'sora-adv-br-safesign'
+sora: restart Chromium/Brave/Chrome for them to pick up the module
+
+$ sora provide list
+$ sora provide remove sora-adv-br-safesign
+```
+
+Nada é instalado no host. Funciona porque o p11-kit tem *remoting* desde 2017,
+feito para encaminhar token por SSH: a configuração de um módulo pode nomear um
+comando que fala o protocolo por stdin/stdout em vez de uma biblioteca local.
+Trocar `ssh` por `distrobox enter` é o truque inteiro. Não há daemon nem
+socket: o p11-kit inicia o comando sob demanda e ele morre junto com quem o
+usou.
+
+O `--no-nss` pula o registro em `~/.pki/nssdb`, que é o que faz Chromium, Brave
+e Chrome enxergarem o módulo (o Firefox tem banco próprio por perfil). Esse
+registro é singleton: é escrito uma vez só, não importa quantos módulos você
+publique, e é removido quando o último sai. O sora não mexe em proxy do p11-kit
+que ele não registrou.
+
+**No que isso não pode virar.** Não vira "usar qualquer `.so` da box". O
+PKCS#11 é remotável por um acidente feliz de projeto (tabela de funções estável
+e de granularidade grossa, sem callbacks, com propriedade de memória definida)
+e, mesmo assim, alguém teve que escrever o marshalling à mão, função por
+função. A generalização correta é para cima, no ponto de integração, não para
+baixo na ABI. Veja [docs/rfc-provide.md](docs/rfc-provide.md).
+
+**Segurança.** Publicar um recurso da box dá a qualquer aplicativo do host o
+mesmo acesso que ele teria se o recurso fosse local. É equivalente, não pior,
+mas vale dizer, porque quem usa container costuma esperar o contrário.
 
 ### Tab completion
 
@@ -334,10 +409,10 @@ Detalhe de implementação fica deliberadamente fora deste README (em inglês):
 - [docs/decisions.md](docs/decisions.md) — por que bash, por que não um
   usuário de sistema dedicado, por que não um shim de PATH, por que não
   exportar tudo, prior art.
-- [docs/rfc-provide.md](docs/rfc-provide.md) — proposta (não implementada):
-  `sora provide`, registrar um recurso da box num ponto de integração do host
-  (módulos PKCS#11, manifestos de native messaging), com duas implementações
-  de referência funcionando por trás.
+- [docs/rfc-provide.md](docs/rfc-provide.md) — o desenho por trás do `sora
+  provide`: por que um comando com adaptadores, por que o PKCS#11 é remotável e
+  um `.so` qualquer não é, as medições e as armadilhas. O PKCS#11 está pronto;
+  o adaptador de native messaging ainda é proposta.
 - [docs/releasing.md](docs/releasing.md) — releases por tag, `bin/release`.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — o que o CI impõe.
 

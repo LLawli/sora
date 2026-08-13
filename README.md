@@ -77,7 +77,7 @@ other's territory:
 | Tab completion | yes, see below (bash and zsh; fish reduced) | yes, plus the tool's own generator |
 | Coverage | every binary in every box, automatically | one command at a time, explicitly |
 | PATH pollution | none | one file per exported command |
-| Host precedence | structural (hook fires only after PATH misses) | depends on PATH order |
+| Host precedence | structural (hook fires only after PATH misses) | enforced: an export that would shadow a host binary is refused |
 
 **Why not simply export everything?** A box has thousands of binaries.
 Exporting them all floods PATH and tab completion, inverts precedence on any
@@ -157,6 +157,32 @@ Package managers are the flagship use case for eager mode precisely because
 they get invoked from scripts and other contexts where late resolution does
 not apply.
 
+**Exporting something that is not in the box's PATH.** Integration binaries
+usually are not: vendor tools land in `/opt`, and `anxious` resolves a command
+*name*. `--path` takes the binary directly and `--as` names the export:
+
+```console
+$ sora anxious --path /opt/lacuna-webpki/webpki --as webpki-lacuna --box adv-br
+```
+
+`--as` works on its own too, when a box's name for something is not the name
+you want on the host.
+
+**An export that would shadow a host binary is refused.** "Host binaries always
+win" is *structural* for late resolution — the hook only fires after PATH
+already missed — but eager export writes a real file into `~/.local/bin`, which
+usually precedes `/usr/bin`. So sora checks first and stops:
+
+```console
+$ sora anxious fd --box archbox
+sora: warning: 'fd' already exists on the host: /usr/bin/fd
+sora: warning: ~/.local/bin usually precedes /usr/bin, so this export would shadow it
+sora: warning: pick another name with --as, or pass --force to shadow it deliberately
+sora: error: refusing to shadow a host binary
+```
+
+The check costs nothing and runs before any container is touched.
+
 ### `sora anxious --desktop` — GUI apps in the menu
 
 A graphical app in a box needs more than a wrapper: it needs a `.desktop`
@@ -224,6 +250,54 @@ pass `--wmclass`.
 `sora anxious --remove <cmd>` takes the entry and every imported icon with it,
 and so does `sora box rm` for everything that box provided: a launcher left
 pointing at a deleted container is worse than no launcher.
+
+### `sora provide` — publish a box resource to the host
+
+Much of what you want out of a box is never typed by anyone. It is looked up
+by a host program at its own integration point: NSS looking for a PKCS#11
+module, a browser looking for a signing helper, the desktop looking for a MIME
+handler. The shape is always the same — a host configuration file whose "run
+this" field points at something that enters the box — and only the file format
+changes. `anxious --desktop` is the first adapter of that shape; `provide` is
+the general form.
+
+Today it implements PKCS#11: a smartcard/token driver installed **only inside
+a box**, usable by the host's browsers.
+
+```console
+$ sora provide pkcs11 /usr/lib/libaetpkss.so --box adv-br --label safesign
+sora: wrote ~/.config/pkcs11/modules/sora-adv-br-safesign.module
+sora: registered /usr/lib64/p11-kit-proxy.so in ~/.pki/nssdb as sora-p11-kit-proxy
+sora: the host's p11-kit sees module 'sora-adv-br-safesign'
+sora: restart Chromium/Brave/Chrome for them to pick up the module
+
+$ sora provide list
+$ sora provide remove sora-adv-br-safesign
+```
+
+Nothing is installed on the host. It works because p11-kit has had *remoting*
+since 2017, built to forward a token over SSH: a module's configuration can
+name a command that speaks the protocol on stdin/stdout instead of a local
+library. Swapping `ssh` for `distrobox enter` is the whole trick. There is no
+daemon and no socket — p11-kit starts the command on demand and it dies with
+the consumer.
+
+The `--no-nss` flag skips the `~/.pki/nssdb` registration, which is what makes
+Chromium, Brave and Chrome see the module (Firefox has its own per-profile
+database). That registration is a singleton: it is written once however many
+modules you publish, and removed when the last one goes. sora will not touch a
+p11-kit proxy it did not register.
+
+**What this cannot become.** Not "use any `.so` from the box". PKCS#11 is
+remotable by a happy accident of design — a stable, coarse function table with
+no callbacks and well-defined memory ownership — and even then somebody had to
+write the marshalling by hand, function by function. The correct generalization
+is upward, at the integration point, not downward at the ABI. See
+[docs/rfc-provide.md](docs/rfc-provide.md).
+
+**Security.** Publishing a box resource gives any host application the same
+access it would have if the resource were local. That is equivalent, not worse
+— but worth saying, because people reach for containers expecting the opposite.
 
 ### Tab completion
 
@@ -328,10 +402,10 @@ Implementation detail deliberately lives out of this README:
   (keep-id/subuid permissions, sudo resetting `$HOME`, heredoc quoting…).
 - [docs/decisions.md](docs/decisions.md) — why bash, why not a dedicated
   system user, why not a PATH shim, why not export everything, prior art.
-- [docs/rfc-provide.md](docs/rfc-provide.md) — proposal (not implemented):
-  `sora provide`, registering a box resource at a host integration point
-  (PKCS#11 modules, native-messaging manifests), with two working reference
-  implementations behind it.
+- [docs/rfc-provide.md](docs/rfc-provide.md) — the design behind `sora
+  provide`: why one command with adapters, why PKCS#11 is remotable and an
+  arbitrary `.so` is not, the measurements, and the traps. PKCS#11 is shipped;
+  the native-messaging adapter is still a proposal.
 - [docs/releasing.md](docs/releasing.md) — tag-triggered releases,
   `bin/release`.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — what CI enforces.

@@ -1,9 +1,17 @@
 # RFC: `sora provide`
 
-**Status: proposal.** Nothing here is implemented in sora. It is written up
-because the evidence behind it already exists and would otherwise be lost: two
-working reference implementations, measured on real hardware, plus the traps
-found while getting them to work.
+**Status: partly implemented.**
+
+- **Done:** the `sora provide` mechanism and the PKCS#11 adapter, plus both
+  prerequisites listed below (`anxious --path/--as`, and the refusal to shadow
+  a host binary).
+- **Not done:** the native-messaging adapter. Everything this document says
+  about it still stands as a proposal, including the warning that it is the
+  one adapter that is *not* a twenty-line template.
+
+The rest of the document is kept as written: it is the record of the evidence
+behind the design, from two working reference implementations measured on real
+hardware, plus the traps found while getting them to work.
 
 Reference implementations and raw notes: the `extras/` directory of
 `sora-adv-br`, a small project that bridges Brazilian e-signature tooling
@@ -73,17 +81,20 @@ CLI, because a desktop entry is what an ordinary user wants without ever
 learning the phrase "integration point". Renaming a shipped command to make a
 taxonomy come out even is churn paid by users.
 
-## Prerequisites in `anxious`
+## Prerequisites in `anxious` (both implemented)
 
-Both adapters need two things sora does not do yet. The reference
-implementations worked around the first and were bitten by the second.
+Two things sora did not do. The reference implementations worked around the
+first and were bitten by the second. Note that only the native-messaging
+adapter actually needs them: PKCS#11 turned out to need no wrapper at all,
+because p11-kit's `remote:` field takes a command line rather than an
+executable file.
 
 **1. Export by path, under a chosen name.** `anxious` can only export a
 command name resolvable in the box's `PATH`. Integration binaries usually live
 outside it (`/opt/lacuna-webpki/webpki`), so `ponte-assinadores.sh` has to
 `ln -sf` into `/usr/local/bin` **as root inside the box** just to give the
 binary a name sora can see. That workaround should not survive into a
-built-in: something like `sora anxious --path /opt/lacuna-webpki/webpki --as
+built-in. Shipped as `sora anxious --path /opt/lacuna-webpki/webpki --as
 webpki-lacuna --box adv-br`.
 
 **2. Refusal to shadow a host binary.** This is a hole in the project's
@@ -94,8 +105,9 @@ name inside the box and writes into `~/.local/bin`, which usually precedes
 `/usr/bin`, without ever asking whether that name already exists on the host.
 Exporting `webpki` silently hijacks the host's `webpki`.
 
-Adapters should also pick distinct names by default (`webpki-lacuna`, not
-`webpki`).
+Shipped: the export is refused, `--as` is offered as the way out, and `--force`
+shadows deliberately. Adapters should also pick distinct names by default
+(`webpki-lacuna`, not `webpki`).
 
 ## Why not "any library"
 
@@ -193,6 +205,19 @@ PKCS#11.
    installing `nss-tools` on the host: the box's `modutil` writes to the
    host's NSS database, mounted at the same absolute path and using the same
    `sql:` format.
+
+   **The delete side was the open question, and it is now measured.** NSS has
+   `-rawadd` but no `-rawdelete`, and `modutil -delete` goes through
+   `SECMOD_DeleteModule`, which could plausibly try to load the listed
+   modules — the very "load a Fedora `.so` under Debian" failure `-rawadd`
+   exists to dodge. Measured against a disposable Debian trixie box operating
+   on a copy of a real Fedora `~/.pki/nssdb`: `-rawadd` registered the host's
+   `p11-kit-proxy.so`, `-delete` removed exactly that stanza and reported
+   success, the NSS Internal module survived, `cert9.db` and `key4.db` were
+   left byte-identical, and the round trip returned `pkcs11.txt` byte-identical
+   to the original. The mitigations stay regardless (own-name guard, dated
+   backup, never fatal, warn with the manual command), because a failure here
+   should degrade to an inert orphan rather than a damaged database.
 
 2. **The executable path in the configuration file must be absolute.** True
    for every adapter: the browser is started from the desktop menu, with a

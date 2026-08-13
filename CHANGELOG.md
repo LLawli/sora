@@ -11,6 +11,61 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ### Added
 
+- `sora provide` registers a box resource at a host integration point, with
+  PKCS#11 as its first adapter: a token driver installed only inside a box,
+  usable by the host's browsers, with nothing installed on the host.
+
+  ```
+  sora provide pkcs11 <library> --box <box> --label <label> [--no-nss]
+  sora provide list
+  sora provide remove <name>
+  ```
+
+  It works because p11-kit has had remoting since 2017, built to forward a
+  token over SSH: a module configuration can name a command speaking the
+  protocol on stdin/stdout instead of a local library, so `ssh` becomes
+  `distrobox enter`. No daemon, no socket — the command starts on demand and
+  dies with its consumer.
+
+  The `~/.pki/nssdb` registration that makes Chromium/Brave/Chrome see the
+  modules is a singleton: written once regardless of how many modules are
+  published, removed when the last one goes, and never applied to a p11-kit
+  proxy sora did not register. `--no-nss` skips it. `sora doctor` gained
+  checks for missing module files, orphans, dead boxes, a `distrobox` path
+  that moved out from under a module, and provisions with no NSS proxy behind
+  them. `sora box rm` undoes provisions *before* destroying the container,
+  since undoing one runs `modutil` inside it.
+
+  Design and measurements: [docs/rfc-provide.md](docs/rfc-provide.md).
+
+- `sora anxious --path <abs-path-in-box> --as <name> --box <box>` exports a
+  binary that is not in the box's `PATH`, under a name you choose. Integration
+  binaries usually are not in `PATH` (vendor tools land in `/opt`), and until
+  now the only way through was to symlink into `/usr/local/bin` as root inside
+  the box just to give sora a name it could resolve. `--as` also works on its
+  own, to export under a different name than the box uses. No new in-box
+  helper was needed: `command -v` already echoes an absolute path back iff it
+  is executable, which is the same question `sora-which` was answering.
+
+- `sora anxious` now refuses an export that would shadow a host binary, with
+  `--force` to do it deliberately. "Host binaries always win" is the project's
+  headline claim and it is *structural* for late resolution (the hook fires
+  only after `PATH` already missed), but nothing enforced it for eager export,
+  which writes a real file into `~/.local/bin` — usually ahead of `/usr/bin`.
+  The check is free and runs before any container is touched. Re-exporting an
+  existing export is still idempotent: sora's own wrapper is not a conflict.
+
+### Fixed
+
+- `sora anxious --remove` no longer risks deleting an unrelated wrapper.
+  `distrobox-export --delete` derives its target from the *binary* name, so
+  for a wrapper renamed with `--as` it would have gone after
+  `~/.local/bin/<binary>` — potentially another command's export. Whether a
+  rename happened is derived from the two names the registry already carries,
+  so the on-disk format is unchanged.
+
+### Added
+
 - `sora anxious --desktop <cmd> --box <box>` writes a `.desktop` entry for a
   graphical app in a box, asking only for what it cannot read off the box.
   Defaults are seeded from the app's own entry inside the container, so a

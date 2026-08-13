@@ -66,6 +66,10 @@ _sora() {
             return ;;
         --name|--comment|--generic-name|--icon|--keywords|--wmclass)
             return ;;   # free-form: whatever the user wants to read in the menu
+        --path|--as|--label)
+            # --path is a path INSIDE the box, so the host filesystem is the
+            # wrong candidate list; offering nothing is deliberate, not a gap.
+            return ;;
     esac
 
     # Find the subcommand: the first word that is not an option.
@@ -79,7 +83,7 @@ _sora() {
 
     if [ -z "$cmd" ]; then
         mapfile -t COMPREPLY < <(compgen -W \
-            "box images reindex sync conflicts pin which anxious completion \
+            "box images reindex sync conflicts pin which anxious provide completion \
              hook doctor version help" -- "$cur")
         return
     fi
@@ -126,10 +130,28 @@ _sora() {
                     mapfile -t COMPREPLY < <(compgen -W "$(_sora_boxes)" -- "$cur") ;;
             esac
             ;;
+        provide)
+            if [ "$COMP_CWORD" -eq $((i + 1)) ]; then
+                mapfile -t COMPREPLY < <(compgen -W "pkcs11 list remove" -- "$cur")
+                return
+            fi
+            case ${COMP_WORDS[i+1]} in
+                pkcs11)
+                    case $cur in
+                        -*) mapfile -t COMPREPLY < <(compgen -W \
+                                "--box --label --no-nss" -- "$cur") ;;
+                        *)  ;;   # a library path INSIDE the box: nothing to offer
+                    esac ;;
+                remove)
+                    mapfile -t COMPREPLY < <(compgen -W \
+                        "$(_sora_registry_commands provide.list)" -- "$cur") ;;
+            esac
+            ;;
         anxious)
             case $cur in
                 -*) mapfile -t COMPREPLY < <(compgen -W \
                         "--sudo --with-completion --box --list --remove \
+                         --path --as --force \
                          --desktop --name --generic-name --comment --icon \
                          --categories --mime --keywords --wmclass --terminal \
                          --browser --default-browser --detect-wmclass \

@@ -99,7 +99,11 @@ field() { # file key   — same anchored read the CLI itself uses
 }
 
 # --- a packaged app: the box answers almost every question -------------------
-out=$("$SORA_BIN" anxious --desktop chromium --box guibox --no-prompt 2>&1) ||
+# --force because the fixture must stay named 'chromium': the entry-matching
+# logic under test keys on the command name. Without it this test would pass
+# on CI and fail on any developer machine that has Chromium installed, which
+# is the worst possible failure profile.
+out=$("$SORA_BIN" anxious --desktop chromium --box guibox --no-prompt --force 2>&1) ||
     fail "anxious --desktop failed: $out"
 assert_contains "$out" "found an entry inside 'guibox'" "the box's own entry is found"
 [ -f "$ENTRY" ] || fail "no desktop entry written at $ENTRY"
@@ -176,7 +180,7 @@ else
 fi
 
 # --- flags beat the box ------------------------------------------------------
-out=$("$SORA_BIN" anxious --desktop chromium --box guibox --no-prompt \
+out=$("$SORA_BIN" anxious --desktop chromium --box guibox --no-prompt --force \
     --name "My Chromium" --wmclass "custom-class" --terminal 2>&1) ||
     fail "flag override failed: $out"
 assert_eq "$(field "$ENTRY" Name)" "My Chromium" "--name overrides the box value"

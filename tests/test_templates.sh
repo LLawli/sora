@@ -94,7 +94,7 @@ assert_contains "$content" 'libdnf5-plugin-actions' \
 # --- helper scripts ---------------------------------------------------------
 # These run INSIDE a box, under whatever /bin/sh that distro ships, so bashisms
 # here fail on someone else's machine and never on ours.
-for t in detect-pm which desktop-scan pkcs11 json-path; do
+for t in detect-pm which desktop-scan pkcs11 json-path native-messaging; do
     "$SORA_BIN" _template "$t" > "$SANDBOX/$t"
     sh -n "$SANDBOX/$t" || fail "$t: generated script fails sh -n"
 done

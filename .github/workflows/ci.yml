@@ -1,5 +1,10 @@
 # CI — the common ground for contributions: every push and PR runs the test
 # suite (against real bash, zsh and fish) and a strict shellcheck pass.
+#
+# Third-party actions are pinned to a commit SHA, never to a tag. A tag is
+# mutable: whoever controls the action's repository can repoint v7 at new code,
+# and every workflow that trusts the tag runs it on the next push. The trailing
+# comment carries the human-readable version; update both together.
 name: CI
 
 on:
@@ -11,7 +16,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install shells under test
         run: |
           sudo apt-get update
@@ -22,7 +27,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: shellcheck

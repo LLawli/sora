@@ -121,6 +121,7 @@ _sora() {
                                 '--box[which box has the helper]:box:_sora_boxes' \
                                 '--as[export the helper under this name]:name:' \
                                 '--browsers[only these browser profiles]:browsers:' \
+                                '*--extension-id[also allow this extension id]:id:' \
                                 '*:native messaging host name:' ;;
                             remove) _sora_registry provide.list ;;
                         esac

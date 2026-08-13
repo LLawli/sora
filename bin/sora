@@ -706,6 +706,8 @@ template_json_path() {
 #   sora-json-path get-raw <file> <key>  -> the raw literal, escapes intact
 #   sora-json-path set     <file> <key>  -> the whole file, that value replaced
 #                                           (new value in $SORA_JP_VAL)
+#   sora-json-path array-add <file> <key> -> the whole file, one string appended
+#                                           to that top-level array
 # Exit 1 = key absent. Exit 2 = usage or parse error. Only top-level keys.
 set -u
 
@@ -714,8 +716,10 @@ file=${2:-}
 key=${3:-}
 [ -n "$mode" ] && [ -n "$file" ] && [ -n "$key" ] || exit 2
 [ -f "$file" ] || exit 2
-case $mode in get|get-raw|set) ;; *) exit 2 ;; esac
-[ "$mode" = set ] && [ -z "${SORA_JP_VAL+x}" ] && exit 2
+case $mode in get|get-raw|set|array-add) ;; *) exit 2 ;; esac
+case $mode in
+    set|array-add) [ -z "${SORA_JP_VAL+x}" ] && exit 2 ;;
+esac
 
 # The trailing X is a sentinel: awk drops a final newline, and RS="\0" (or
 # "^$") is not portable across gawk, mawk and busybox. Records are rejoined
@@ -740,11 +744,28 @@ case $mode in get|get-raw|set) ;; *) exit 2 ;; esac
                     if (depth == 1 && substr(buf, i + 1, e - i - 1) == key) {
                         k = j + 1
                         while (k <= n && index(" \t\n\r", substr(buf, k, 1)) > 0) k++
-                        if (substr(buf, k, 1) != "\"") exit 2
                         if (found) exit 2       # duplicate top-level key
-                        ve = scan(buf, k, n)
-                        if (ve == 0) exit 2
-                        vs = k; found = 1
+                        if (mode == "array-add") {
+                            # The insertion point is just before the matching
+                            # ']', found by counting brackets from the opening
+                            # one so a nested array cannot end it early.
+                            if (substr(buf, k, 1) != "[") exit 2
+                            d2 = 0; p = k
+                            while (p <= n) {
+                                ch2 = substr(buf, p, 1)
+                                if (ch2 == "\"") { p = scan(buf, p, n); if (p == 0) exit 2 }
+                                else if (ch2 == "[") d2++
+                                else if (ch2 == "]") { d2--; if (d2 == 0) break }
+                                p++
+                            }
+                            if (d2 != 0) exit 2
+                            vs = k; ve = p; found = 1
+                        } else {
+                            if (substr(buf, k, 1) != "\"") exit 2
+                            ve = scan(buf, k, n)
+                            if (ve == 0) exit 2
+                            vs = k; found = 1
+                        }
                     }
                     i = j + 1
                 } else {
@@ -756,6 +777,21 @@ case $mode in get|get-raw|set) ;; *) exit 2 ;; esac
         }
         if (depth != 0) exit 2
         if (!found) exit 1
+        if (mode == "array-add") {
+            # Everything between the brackets, to tell an empty array from one
+            # that needs a separator.
+            inner = substr(buf, vs + 1, ve - vs - 1)
+            gsub(/[ \t\n\r]/, "", inner)
+            # Insert right after the LAST element rather than before the
+            # bracket, so a pretty-printed array keeps its closing bracket on
+            # its own line instead of growing a stray trailing item beside it.
+            # (No apostrophes in here: the whole awk program is single-quoted.)
+            q = ve - 1
+            while (q > vs && index(" \t\n\r", substr(buf, q, 1)) > 0) q--
+            sep = (inner == "" ? "" : ", ")
+            printf "%s", substr(buf, 1, q) sep "\"" ENVIRON["SORA_JP_VAL"] "\"" substr(buf, q + 1)
+            exit 0
+        }
         raw = substr(buf, vs + 1, ve - vs - 1)
         if (mode == "get-raw")   { printf "%s\n", raw; exit 0 }
         if (mode == "get")       { printf "%s\n", decode(raw); exit 0 }
@@ -2616,7 +2652,7 @@ nm_write_one() { # src dest-file new-path oldraw
 }
 
 cmd_provide_native_messaging() {
-    local hostname='' box='' as_name='' browsers='' wrapper name row jp
+    local hostname='' box='' as_name='' browsers='' ext_ids='' wrapper name row jp
     local family path found=0 dir kind dest src oldraw newpath written=0
     local exbox exlabel other flat_hint='' shim app tmpdir
     while [ $# -gt 0 ]; do
@@ -2624,6 +2660,8 @@ cmd_provide_native_messaging() {
             --box|-b)   box=${2:?--box needs a value}; shift ;;
             --as)       as_name=${2:?--as needs a value}; shift ;;
             --browsers) browsers=${2:?--browsers needs a value}; shift ;;
+            --extension-id)
+                ext_ids="$ext_ids${2:?--extension-id needs a value}$TAB"; shift ;;
             -*)         die "unknown option for 'provide native-messaging': $1" ;;
             *)          [ -z "$hostname" ] && hostname=$1 || die "unexpected argument: $1" ;;
         esac
@@ -2732,6 +2770,15 @@ EOF
     # back apart when both halves may contain '-'.
     provide_write "$name" native-messaging "$box" "$hostname" "$wrapper" "$binpath"
 
+    # --extension-id is the one operation that relaxes the byte-for-byte
+    # guarantee: the file then differs from the box's by the path value AND by
+    # the origins appended here. It is applied to the temp copy, once, before
+    # any destination is written, so every destination still gets the same
+    # bytes and the per-destination round-trip check still holds.
+    if [ -n "$ext_ids" ]; then
+        nm_add_extension_ids "$tmpdir" "$scan" "$ext_ids" || die "could not add the extension id(s)"
+    fi
+
     while IFS=$TAB read -r family path; do
         [ -n "$family" ] || continue
         src="$tmpdir/$family.json"
@@ -2806,6 +2853,57 @@ nm_browser_wanted() { # dir list -> 0 if this directory should be written
         case $lower in *"$want"*) return 0 ;; esac
     done
     return 1
+}
+
+# The two families name the same thing differently: Chromium wants a full
+# chrome-extension:// origin and Firefox wants the bare extension id, so the
+# user gives the id once and each manifest gets the right shape.
+# An extension id belongs to exactly one browser family: Chromium ids are 32
+# letters in a-p, Firefox ids are {uuid} or name@domain. So each id is routed
+# to the family whose shape it has, rather than being forced into both - the
+# same id cannot be valid for both, and demanding one per family would be
+# asking the user to know something they already told us by its format.
+nm_add_extension_ids() { # tmpdir scan ids
+    local jp id bare kind family key item tmp used
+    jp="$SORA_DATA/libexec/sora-json-path"
+    local IFS=$TAB
+    for id in $3; do
+        [ -n "$id" ] || continue
+        bare=${id#chrome-extension://}; bare=${bare%/}
+        kind=''
+        case $bare in
+            *[!a-p]*) ;;
+            *) [ ${#bare} = 32 ] && kind=chromium ;;
+        esac
+        if [ -z "$kind" ]; then
+            case $id in
+                \{*\}|*@*) kind=firefox; bare=$id ;;
+                *) die "'$id' is neither a Chromium extension id (32 characters, a-p) nor a Firefox one ({uuid} or name@domain)" ;;
+            esac
+        fi
+        if [ "$kind" = chromium ]; then
+            key=allowed_origins; item="chrome-extension://$bare/"
+        else
+            key=allowed_extensions; item=$bare
+        fi
+        used=0
+        for family in chromium firefox; do
+            [ "$family" = "$kind" ] || continue
+            [ -f "$1/$family.json" ] || continue
+            tmp="$1/$family.json.tmp"
+            if SORA_JP_VAL="$item" "$jp" array-add "$1/$family.json" "$key" > "$tmp" 2>/dev/null; then
+                mv -f "$tmp" "$1/$family.json"
+                info "added $item to $key"
+                used=1
+            else
+                rm -f "$tmp"
+                die "the $family manifest has no '$key' array to add '$item' to"
+            fi
+        done
+        [ "$used" = 1 ] ||
+            warn "'$id' is a $kind extension id, but '$hostname' ships no $kind manifest; ignored"
+    done
+    return 0
 }
 
 nm_backup_foreign() { # file
@@ -3308,7 +3406,7 @@ Publish a box resource to the host
                                    p11-kit module file and registers the host's
                                    p11-kit-proxy.so in ~/.pki/nssdb.
   sora provide native-messaging <host-name> --box <box> [--as <name>]
-                                   [--browsers <list>]
+                                   [--browsers <list>] [--extension-id <id>]...
                                    a browser signing helper that lives in a
                                    box, usable by the host's browsers. Copies
                                    the manifest out and repoints it at an

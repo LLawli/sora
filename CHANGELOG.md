@@ -11,6 +11,36 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ### Added
 
+- `sora provide native-messaging <host-name> --box <box>` publishes a browser
+  signing helper that lives in a box, so the host's browsers can use it. It is
+  the complement of `provide pkcs11`: that one covers authentication by
+  certificate, where the browser itself loads the module; this one covers
+  signing, where a separate helper does the work over stdin/stdout.
+
+  The manifest is copied out of the box and rewritten with **only** its `path`
+  field changed, because `allowed_origins` binds a manifest to a browser
+  extension's ID and cannot be invented. Every destination is verified before
+  the file is put in place: setting the rewritten copy back to its old value
+  has to reproduce the original byte for byte.
+
+  Profiles are discovered rather than listed, including Flatpak ones. A Flatpak
+  browser executes the manifest's path *inside its sandbox*, where distrobox
+  does not exist, so sora writes a `flatpak-spawn` shim into the app's own
+  config tree and prints the one `flatpak override` command it needs, without
+  running it.
+
+  `--extension-id` (repeatable) additionally allows a sideloaded extension.
+  Each id is routed to the family whose format it has, since a Chromium id (32
+  characters, a-p) is never a Firefox one (`{uuid}` or `name@domain`). It is
+  the one operation that relaxes the byte-for-byte guarantee, which is why it
+  is opt-in and separately verified.
+
+  Under it, a generated `sora-json-path` reads and rewrites exactly one
+  top-level JSON value, preserving every other byte. It is awk, not jq or
+  python3: awk is already a hard dependency of sora and those are not, and an
+  adapter that failed on a host where the rest of sora works would be the worse
+  outcome.
+
 - `sora provide` registers a box resource at a host integration point, with
   PKCS#11 as its first adapter: a token driver installed only inside a box,
   usable by the host's browsers, with nothing installed on the host.

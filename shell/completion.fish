@@ -146,6 +146,8 @@ complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcom
     -l as -x -d 'Export the helper under this name'
 complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from native-messaging' \
     -l browsers -x -d 'Only these browser profiles'
+complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from native-messaging' \
+    -l extension-id -x -d 'Also allow this extension id'
 complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from remove' \
     -a '(__sora_registry provide.list)'
 

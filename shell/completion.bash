@@ -66,7 +66,7 @@ _sora() {
             return ;;
         --name|--comment|--generic-name|--icon|--keywords|--wmclass)
             return ;;   # free-form: whatever the user wants to read in the menu
-        --path|--as|--label|--browsers)
+        --path|--as|--label|--browsers|--extension-id)
             # --path is a path INSIDE the box, so the host filesystem is the
             # wrong candidate list; offering nothing is deliberate, not a gap.
             return ;;
@@ -145,7 +145,7 @@ _sora() {
                 native-messaging)
                     case $cur in
                         -*) mapfile -t COMPREPLY < <(compgen -W \
-                                "--box --as --browsers" -- "$cur") ;;
+                                "--box --as --browsers --extension-id" -- "$cur") ;;
                         *)  ;;   # a manifest name from inside the box
                     esac ;;
                 remove)

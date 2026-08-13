@@ -235,6 +235,46 @@ out=$("$SORA_BIN" provide native-messaging 'Bad/Name' --box advbr 2>&1) &&
     fail "an invalid host name must be refused"
 assert_contains "$out" "may only contain" "the charset is named"
 
+# --- --extension-id ----------------------------------------------------------
+# The one operation that relaxes the byte-for-byte guarantee, so it is explicit
+# about what it changes: the path value AND the origins it appended, nothing
+# else. The two families name the same thing differently.
+"$SORA_BIN" provide remove sora-advbr-com.lacunasoftware.webpki >/dev/null 2>&1
+out=$("$SORA_BIN" provide native-messaging com.lacunasoftware.webpki --box advbr \
+    --extension-id abcdefghijklmnopabcdefghijklmnop 2>&1) || fail "--extension-id failed: $out"
+assert_contains "$(cat "$C_DEST")" 'chrome-extension://abcdefghijklmnopabcdefghijklmnop/' \
+    "chromium gets a full chrome-extension origin"
+assert_contains "$(cat "$C_DEST")" 'chrome-extension://dcngeagmmhegagicpcmpinaoklddcgon/' \
+    "and the vendor origin is still there"
+# The relaxed invariant, asserted: remove exactly what was appended and the
+# path, and the original comes back.
+sed 's|, "chrome-extension://abcdefghijklmnopabcdefghijklmnop/"||' "$C_DEST" > "$SANDBOX/noext.json"
+SORA_JP_VAL="/opt/lacuna-webpki/webpki" "$JP" set "$SANDBOX/noext.json" path > "$SANDBOX/noext2.json"
+cmp -s "$CHR/com.lacunasoftware.webpki.json" "$SANDBOX/noext2.json" ||
+    fail "--extension-id changed more than the path and the appended origin"
+
+# A Chromium id is 32 characters in a-p; anything else is a typo, not a policy.
+# A Firefox id goes to allowed_extensions, in the same run.
+"$SORA_BIN" provide remove sora-advbr-com.lacunasoftware.webpki >/dev/null 2>&1
+out=$("$SORA_BIN" provide native-messaging com.lacunasoftware.webpki --box advbr \
+    --extension-id abcdefghijklmnopabcdefghijklmnop \
+    --extension-id 'sideload@example.com' 2>&1) || fail "mixed ids failed: $out"
+assert_contains "$(cat "$C_DEST")" 'chrome-extension://abcdefghijklmnopabcdefghijklmnop/' \
+    "the Chromium id went to the Chromium manifest"
+assert_not_contains "$(cat "$C_DEST")" 'sideload@example.com' \
+    "and the Firefox id did NOT"
+assert_contains "$(cat "$F_DEST")" 'sideload@example.com' \
+    "the Firefox id went to allowed_extensions"
+assert_not_contains "$(cat "$F_DEST")" 'chrome-extension://abcdefghijklmnop' \
+    "and the Chromium id did NOT"
+"$SORA_BIN" provide remove sora-advbr-com.lacunasoftware.webpki >/dev/null 2>&1
+
+# Something that is neither shape is a typo, not a policy.
+out=$("$SORA_BIN" provide native-messaging com.lacunasoftware.webpki --box advbr \
+    --extension-id 'not-an-id' 2>&1) && fail "a malformed id must be refused"
+assert_contains "$out" "neither a Chromium extension id" "both formats are named"
+"$SORA_BIN" provide remove sora-advbr-com.lacunasoftware.webpki >/dev/null 2>&1
+
 # --- box rm purges before destroying the container ---------------------------
 : > "$SANDBOX/order.log"
 out=$("$SORA_BIN" box rm advbr --yes 2>&1) || fail "box rm failed: $out"

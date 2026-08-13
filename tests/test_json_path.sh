@@ -152,4 +152,39 @@ sh "$JP" set "$F" path >/dev/null 2>&1 && fail "set without SORA_JP_VAL must be 
 assert_eq "$(get "$F")" "/big/target" "a large manifest still parses"
 roundtrip "$F" "large manifest"
 
+# --- array-add ----------------------------------------------------------------
+# The one operation that grows a file rather than replacing a span, so its
+# invariant is weaker and stated differently: the output must equal the input
+# with exactly the appended literal removed.
+arr_roundtrip() { # file key item label
+    local out back
+    out="$SANDBOX/aa.out"; back="$SANDBOX/aa.back"
+    SORA_JP_VAL="$2" sh "$JP" array-add "$1" "$3" > "$out" || fail "$4: array-add failed"
+    sed "s|, \"$2\"||; s|\"$2\"||" "$out" > "$back"
+    cmp -s "$1" "$back" || fail "$4: array-add changed more than the appended item"
+}
+
+printf '{\n  "allowed_origins": [\n    "chrome-extension://aaaa/"\n  ],\n  "path": "/x"\n}\n' > "$F"
+out=$(SORA_JP_VAL='chrome-extension://bbbb/' sh "$JP" array-add "$F" allowed_origins)
+assert_contains "$out" '    "chrome-extension://aaaa/", "chrome-extension://bbbb/"' \
+    "the item lands beside the last element, not beside the bracket"
+assert_contains "$out" '  ],' "the closing bracket keeps its own line"
+arr_roundtrip "$F" 'chrome-extension://bbbb/' allowed_origins "pretty array"
+
+printf '{"allowed_origins":[],"path":"/x"}' > "$F"
+out=$(SORA_JP_VAL='x' sh "$JP" array-add "$F" allowed_origins)
+assert_eq "$out" '{"allowed_origins":["x"],"path":"/x"}' "an empty array gets no leading comma"
+
+# A nested array must not end the scan early.
+printf '{"a":[["x"],"y"],"path":"/p"}' > "$F"
+out=$(SORA_JP_VAL='z' sh "$JP" array-add "$F" a)
+assert_eq "$out" '{"a":[["x"],"y", "z"],"path":"/p"}' "a nested array does not close the outer one"
+
+printf '{"path":"/x"}' > "$F"
+SORA_JP_VAL=q sh "$JP" array-add "$F" allowed_origins >/dev/null 2>&1 &&
+    fail "array-add on a missing key must fail"
+printf '{"allowed_origins":"notanarray","path":"/x"}' > "$F"
+SORA_JP_VAL=q sh "$JP" array-add "$F" allowed_origins >/dev/null 2>&1 &&
+    fail "array-add on a non-array must fail"
+
 echo "ok: sora-json-path"

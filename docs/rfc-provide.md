@@ -5,9 +5,9 @@
 - **Done:** the `sora provide` mechanism, the PKCS#11 adapter, the
   native-messaging adapter, and both prerequisites listed below
   (`anxious --path/--as`, and the refusal to shadow a host binary).
-- **Not done:** `--extension-id`, for a helper installed in the box with no
-  manifest of its own. It is the one operation that breaks the byte-for-byte
-  guarantee, so it was deliberately left out of the core adapter.
+- **Not done:** synthesising a manifest for a helper the box ships without one
+  at all (a tarball install). `--extension-id` covers the adjacent case, a
+  sideloaded extension whose ID the vendor's manifest does not list.
 
 Two things this document got wrong, both found by building it:
 

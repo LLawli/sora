@@ -37,10 +37,20 @@ while [ \$# -gt 0 ] && [ "\$1" != "--" ]; do shift; done
 [ \$# -gt 0 ] || exit 0
 shift
 case "\$1" in
-    *sora-pkcs11) PATH="$BOXBIN:\$PATH" exec sh "\$@" ;;
+    # PATH is \$BOXBIN and NOTHING else. The fake box's world must not inherit
+    # the host's: with ':\$PATH' appended, "the box has no modutil" silently
+    # becomes "the host has modutil", which passes on a machine without
+    # nss-tools and fails on one with it.
+    *sora-pkcs11) PATH="$BOXBIN" exec /bin/sh "\$@" ;;
     *) exit 1 ;;
 esac
 EOF
+
+# The real tools the fakes below shell out to, named explicitly. Anything not
+# listed here does not exist inside the fake box, which is the point.
+for t in grep sed awk mkdir mv rm cat printf; do
+    p=$(command -v "$t") && ln -sf "$p" "$BOXBIN/$t"
+done
 
 cat > "$BOXBIN/p11-kit" <<'EOF'
 #!/bin/sh
@@ -87,7 +97,15 @@ case "\$op" in
 esac
 exit 0
 EOF
-chmod +x "$STUB_BIN/podman" "$STUB_BIN/distrobox" "$BOXBIN/p11-kit" "$BOXBIN/modutil"
+# Reproduces the CI runner, which ships libnss3-tools: a modutil on the HOST
+# must never be reachable from inside the fake box. Without the hermetic PATH
+# above, this file is what the "box has no modutil" case would find, and the
+# test would pass on a machine without nss-tools and fail on one with it.
+printf '#!/bin/sh\necho "HOST modutil leaked into the fake box" >&2\nexit 1\n' \
+    > "$STUB_BIN/modutil"
+
+chmod +x "$STUB_BIN/podman" "$STUB_BIN/distrobox" "$STUB_BIN/modutil" \
+    "$BOXBIN/p11-kit" "$BOXBIN/modutil"
 
 # sora-pkcs11's 'check' mode tests that the library exists inside the box, and
 # the fake box's filesystem is the host's, so the fixture is a real file under

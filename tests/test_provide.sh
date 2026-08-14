@@ -311,4 +311,76 @@ RM_LINE=$(grep -n 'distrobox rm' "$ORDER" | head -n1 | cut -d: -f1)
 [ "$DEL_LINE" -lt "$RM_LINE" ] ||
     fail "the NSS undo ran AFTER the container was destroyed (line $DEL_LINE vs $RM_LINE)"
 
+# --- Firefox: one NSS database PER PROFILE -----------------------------------
+# The Chromium family shares ~/.pki/nssdb. Firefox does not, so registering the
+# proxy there alone leaves every Firefox blind - which is what this covers.
+# Runs LAST, after 'box rm' emptied the registry: the NSS registration is a
+# singleton that only goes when the last pkcs11 provision does, so a leftover
+# row from an earlier block would (correctly) keep it alive and make the
+# removal assertions below unreachable.
+make_box_meta advbr 0
+rm -rf "$NSSDB" "$MODULES"
+P1="$HOME/.mozilla/firefox/abc.default"
+P2="$HOME/.mozilla/firefox/xyz.dev"
+# The XDG root exists because Firefox 147 moved the profile there, and the two
+# coexist: an upgraded install keeps the old path.
+P3="$XDG_CONFIG_HOME/mozilla/firefox/new.default"
+NOTPROFILE="$HOME/.mozilla/firefox/Crash Reports"
+mkdir -p "$P1" "$P2" "$P3" "$NOTPROFILE"
+: > "$P1/prefs.js"; : > "$P2/prefs.js"; : > "$P3/prefs.js"
+# P1 has been opened before; P2 and P3 never have, so they have no database at
+# all - and -rawadd into a missing database is silently dropped.
+printf 'library=\nname=NSS Internal PKCS #11 Module\n\n' > "$P1/pkcs11.txt"
+
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label ff 2>&1) || fail "$out"
+
+for d in "$P1" "$P2" "$P3" "$NSSDB"; do
+    grep -q "^name=sora-p11-kit-proxy$" "$d/pkcs11.txt" 2>/dev/null ||
+        fail "the proxy was not registered in $d"
+done
+[ -f "$NOTPROFILE/pkcs11.txt" ] && fail "a directory without prefs.js is not a profile"
+assert_contains "$out" "4 NSS database(s)" "every database is reported"
+# The never-opened profiles prove the database was created first: -rawadd alone
+# would have reported success and written nothing.
+assert_contains "$(cat "$MODLOG")" "sql:$P2" "the never-opened profile was targeted"
+
+# --- idempotency across profiles ---------------------------------------------
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label ff2 2>&1) || fail "$out"
+for d in "$P1" "$P2" "$P3"; do
+    assert_eq "$(grep -c "^name=sora-p11-kit-proxy$" "$d/pkcs11.txt")" "1" \
+        "re-providing did not duplicate the stanza in $d"
+done
+
+# --- a profile registered by something else is left alone --------------------
+P4="$HOME/.mozilla/firefox/foreign.default"
+mkdir -p "$P4"; : > "$P4/prefs.js"
+printf 'library=/usr/lib64/p11-kit-proxy.so\nname=Someone Else\n\n' > "$P4/pkcs11.txt"
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label ff3 2>&1) || fail "$out"
+assert_contains "$out" "registered by something else" "the foreign profile is reported"
+grep -q "^name=Someone Else$" "$P4/pkcs11.txt" || fail "the foreign registration was destroyed"
+grep -q "^name=sora-p11-kit-proxy$" "$P4/pkcs11.txt" &&
+    fail "sora registered into a profile that already had another proxy"
+
+# --- removal covers every profile, and still spares the foreign one ----------
+"$SORA_BIN" provide remove sora-advbr-ff >/dev/null 2>&1
+"$SORA_BIN" provide remove sora-advbr-ff2 >/dev/null 2>&1
+out=$("$SORA_BIN" provide remove sora-advbr-ff3 2>&1) || fail "$out"
+for d in "$P1" "$P2" "$P3" "$NSSDB"; do
+    grep -q "^name=sora-p11-kit-proxy$" "$d/pkcs11.txt" 2>/dev/null &&
+        fail "removal left the proxy in $d"
+done
+grep -q "^name=Someone Else$" "$P4/pkcs11.txt" || fail "removal destroyed the foreign registration"
+grep -q 'NSS Internal PKCS #11 Module' "$P1/pkcs11.txt" ||
+    fail "removal destroyed the NSS Internal module in a profile"
+
+# --- --no-nss touches no profile ---------------------------------------------
+rm -rf "$NSSDB"
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label quiet2 --no-nss 2>&1) || fail "$out"
+for d in "$P1" "$P2" "$P3"; do
+    grep -q "^name=sora-p11-kit-proxy$" "$d/pkcs11.txt" 2>/dev/null &&
+        fail "--no-nss wrote into $d"
+done
+"$SORA_BIN" provide remove sora-advbr-quiet2 >/dev/null 2>&1
+rm -rf "$HOME/.mozilla" "$XDG_CONFIG_HOME/mozilla"
+
 echo "ok: provide pkcs11"

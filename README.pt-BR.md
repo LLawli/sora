@@ -301,8 +301,12 @@ Trocar `ssh` por `distrobox enter` é o truque inteiro. Não há daemon nem
 socket: o p11-kit inicia o comando sob demanda e ele morre junto com quem o
 usou.
 
-O `--no-nss` pula o registro em `~/.pki/nssdb`, que é o que faz Chromium, Brave
-e Chrome enxergarem o módulo (o Firefox tem banco próprio por perfil). Esse
+O `--no-nss` pula o registro no NSS, que é o que faz o navegador enxergar o
+módulo. Chromium, Brave e Chrome compartilham um banco em `~/.pki/nssdb`; o
+**Firefox tem um por perfil**, então o sora registra em todos os que encontrar
+(tanto `~/.mozilla/firefox` quanto `$XDG_CONFIG_HOME/mozilla/firefox` — o
+Firefox 147 mudou o caminho e os dois convivem). Perfil que já tem um proxy do
+p11-kit registrado por outra coisa não é tocado. Esse
 registro é singleton: é escrito uma vez só, não importa quantos módulos você
 publique, e é removido quando o último sai. O sora não mexe em proxy do p11-kit
 que ele não registrou.

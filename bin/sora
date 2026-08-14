@@ -2210,17 +2210,68 @@ nss_proxy_lib() {
     return 1
 }
 
-nss_ours() { grep -q "^name=$NSS_MODULE_NAME\$" "$NSSDB_DIR/pkcs11.txt" 2>/dev/null; }
+nss_ours() { grep -q "^name=$NSS_MODULE_NAME\$" "$1/pkcs11.txt" 2>/dev/null; }
 
-nss_foreign_proxy() { grep -q 'p11-kit-proxy\.so' "$NSSDB_DIR/pkcs11.txt" 2>/dev/null; }
+nss_foreign_proxy() { grep -q 'p11-kit-proxy\.so' "$1/pkcs11.txt" 2>/dev/null; }
 
-nss_backup() {
-    local dest
+# One database is one of three things, read as TEXT rather than through
+# 'modutil -list', which would load the modules.
+nss_state() { # dbdir -> ours | foreign | absent
+    [ -f "$1/pkcs11.txt" ] || { printf 'absent\n'; return 0; }
+    if nss_ours "$1";           then printf 'ours\n'
+    elif nss_foreign_proxy "$1"; then printf 'foreign\n'
+    else                             printf 'absent\n'
+    fi
+}
+
+nss_backup() { # dbdir
+    local dest tag
     dest="$SORA_CACHE/nssdb"
     mkdir -p "$dest"
-    dest="$dest/pkcs11.txt.$(date -u +%Y%m%dT%H%M%SZ)"
-    cp -f "$NSSDB_DIR/pkcs11.txt" "$dest" 2>/dev/null || return 1
-    info "backed up the NSS module list to $dest"
+    # The database has to be part of the filename: with Firefox there are many,
+    # and a timestamp alone collides for any two backed up in the same second.
+    tag=$(printf '%s' "$1" | tr -c 'A-Za-z0-9' '_')
+    dest="$dest/pkcs11.txt.$tag.$(date -u +%Y%m%dT%H%M%SZ)"
+    cp -f "$1/pkcs11.txt" "$dest" 2>/dev/null || return 1
+    info "backed up $1/pkcs11.txt to $dest"
+}
+
+# Firefox keeps one NSS database PER PROFILE, which is why writing the .module
+# file and registering the proxy in ~/.pki/nssdb leaves every Firefox blind:
+# that one database is the Chromium family's, shared.
+#
+# Both roots are scanned on purpose. Firefox 147 moved the profile to
+# $XDG_CONFIG_HOME/mozilla/firefox, and the two coexist, because an upgraded
+# install keeps the old path. Looking only in ~/.mozilla/firefox finds zero
+# profiles on a freshly installed Firefox.
+NSS_FIREFOX_ROOTS=".mozilla/firefox .librewolf .waterfox .zen .floorp"
+
+nss_firefox_profiles() {
+    local rel root p
+    for rel in $NSS_FIREFOX_ROOTS; do
+        for root in "$HOME/$rel" "$XDG_CONFIG_ROOT/${rel#.}"; do
+            [ -d "$root" ] || continue
+            # A profile is a directory with a prefs.js in it. profiles.ini is
+            # not used: it takes both relative and absolute paths, and a
+            # hand-made profile never appears there, while prefs.js is in all
+            # of them, always. Globbing rather than 'find -printf', which is
+            # GNU-only, for the same two depths.
+            for p in "$root"/*/prefs.js "$root"/*/*/prefs.js; do
+                [ -f "$p" ] && printf '%s\n' "${p%/prefs.js}"
+            done
+        done
+    done
+    return 0
+}
+
+# Every host NSS database sora registers into: the shared Chromium one, then
+# one per Firefox profile. Flatpak profiles are deliberately absent - inside a
+# sandbox the proxy is useless, because flatpak writes 'user-config: none' into
+# every sandbox and no user module is read at all. That case needs
+# p11-kit-client.so instead, and is a separate adapter.
+nss_databases() {
+    printf '%s\n' "$NSSDB_DIR"
+    nss_firefox_profiles
 }
 
 # modutil lives inside a box, not on the host: the host's NSS database is
@@ -2239,63 +2290,93 @@ nss_modutil_box() { # preferred
 }
 
 nss_register() { # box
-    local proxy result
+    local proxy db n=0 skipped=0
     if ! proxy=$(nss_proxy_lib); then
         warn "p11-kit-proxy.so was not found on the host; browsers will not see the module"
         warn "install your distribution's p11-kit package, then re-run this command"
         return 0
     fi
-    if nss_ours; then
-        return 0
-    fi
-    if nss_foreign_proxy; then
-        info "$NSSDB_DIR already has a p11-kit proxy registered by something else; leaving it alone"
-        return 0
-    fi
-    mkdir -p "$NSSDB_DIR"
-    [ -f "$NSSDB_DIR/pkcs11.txt" ] && nss_backup
     ensure_libexec
-    result=$(distrobox enter --name "$1" -- \
-        "$SORA_DATA/libexec/sora-pkcs11" nss-add "$NSSDB_DIR" "$proxy" "$NSS_MODULE_NAME" \
-        2>/dev/null) || result=failed
-    case $result in
-        ok) info "registered $proxy in ~/.pki/nssdb as $NSS_MODULE_NAME" ;;
-        no-modutil)
-            local pm hint
-            pm=$(toml_get "$(box_meta "$1")" package_manager)
-            warn "box '$1' has no 'modutil', so ~/.pki/nssdb was not touched"
-            hint=$(pkg_install_hint "$pm" modutil) &&
-                warn "run:  sora box enter $1 -- $hint"
-            warn "the module file is in place; browsers will see it once NSS knows the proxy" ;;
-        *) warn "registering the proxy in ~/.pki/nssdb failed; the module file is still in place" ;;
-    esac
+    # One database per Firefox profile, plus the shared Chromium one. A profile
+    # that cannot be written must not stop the others, so every failure here is
+    # a warn.
+    while IFS= read -r db; do
+        [ -n "$db" ] || continue
+        case $(nss_state "$db") in
+            ours) n=$((n + 1)); continue ;;
+            foreign)
+                info "$db already has a p11-kit proxy registered by something else; leaving it alone"
+                skipped=$((skipped + 1)); continue ;;
+        esac
+        nss_register_one "$1" "$db" "$proxy" && n=$((n + 1))
+    done <<EOF
+$(nss_databases)
+EOF
+    [ "$n" -gt 0 ] && info "the proxy is registered in $n NSS database(s)"
     return 0
 }
 
+nss_register_one() { # box dbdir proxy
+    local result pm hint
+    mkdir -p "$2"
+    [ -f "$2/pkcs11.txt" ] && nss_backup "$2"
+    result=$(distrobox enter --name "$1" -- \
+        "$SORA_DATA/libexec/sora-pkcs11" nss-add "$2" "$3" "$NSS_MODULE_NAME" \
+        2>/dev/null) || result=failed
+    # modutil's exit status is not the answer: a -rawadd into a database that
+    # does not exist yet is silently dropped and still reports success. The
+    # file is re-read instead.
+    if nss_ours "$2"; then
+        info "registered $3 in $2 as $NSS_MODULE_NAME"
+        return 0
+    fi
+    case $result in
+        no-modutil)
+            pm=$(toml_get "$(box_meta "$1")" package_manager)
+            warn "box '$1' has no 'modutil', so $2 was not touched"
+            hint=$(pkg_install_hint "$pm" modutil) &&
+                warn "run:  sora box enter $1 -- $hint"
+            warn "the module file is in place; browsers will see it once NSS knows the proxy" ;;
+        *) warn "registering the proxy in $2 failed; the module file is still in place" ;;
+    esac
+    return 1
+}
+
 nss_unregister() { # box
-    local result box
-    [ -f "$NSSDB_DIR/pkcs11.txt" ] || return 0
-    # The one guard that makes the undo safe: if the entry is not the one we
-    # named, we did not create it and we do not touch it. This is why the
-    # module name carries the sora- prefix.
-    nss_ours || return 0
-    nss_backup
+    local box db n=0
     if ! box=$(nss_modutil_box "$1"); then
-        warn "no running box to run 'modutil' in; ~/.pki/nssdb still lists $NSS_MODULE_NAME"
+        warn "no running box to run 'modutil' in; the NSS databases still list $NSS_MODULE_NAME"
         return 0
     fi
     ensure_libexec
-    result=$(distrobox enter --name "$box" -- \
-        "$SORA_DATA/libexec/sora-pkcs11" nss-del "$NSSDB_DIR" "$NSS_MODULE_NAME" \
+    while IFS= read -r db; do
+        [ -n "$db" ] || continue
+        # The one guard that makes the undo safe: if the entry is not the one
+        # we named, we did not create it and we do not touch it. This is why
+        # the module name carries the sora- prefix.
+        [ "$(nss_state "$db")" = ours ] || continue
+        nss_unregister_one "$box" "$db" && n=$((n + 1))
+    done <<EOF
+$(nss_databases)
+EOF
+    [ "$n" -gt 0 ] && info "removed $NSS_MODULE_NAME from $n NSS database(s)"
+    return 0
+}
+
+nss_unregister_one() { # box dbdir
+    local result
+    nss_backup "$2"
+    result=$(distrobox enter --name "$1" -- \
+        "$SORA_DATA/libexec/sora-pkcs11" nss-del "$2" "$NSS_MODULE_NAME" \
         2>/dev/null) || result=failed
-    if nss_ours; then
+    if nss_ours "$2"; then
         # Never hand-edit pkcs11.txt: what is left is an orphan registration of
         # the HOST's own proxy with no modules behind it, which is inert.
-        warn "could not remove $NSS_MODULE_NAME from ~/.pki/nssdb (modutil said: $result)"
-        warn "remove it by hand with:  modutil -delete $NSS_MODULE_NAME -dbdir sql:$NSSDB_DIR"
-        return 0
+        warn "could not remove $NSS_MODULE_NAME from $2 (modutil said: $result)"
+        warn "remove it by hand with:  modutil -delete $NSS_MODULE_NAME -dbdir sql:$2"
+        return 1
     fi
-    info "removed $NSS_MODULE_NAME from ~/.pki/nssdb"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -3361,8 +3442,24 @@ cmd_doctor() {
             [ -n "$(provide_row "$pname")" ] ||
                 bad "orphan module file $f; 'sora provide remove $pname' will take it"
         done
-        if [ "$wants_nss" = 1 ] && ! nss_foreign_proxy; then
-            bad "there are pkcs11 provisions but ~/.pki/nssdb has no p11-kit proxy; Chromium/Brave/Chrome will not see them"
+        if [ "$wants_nss" = 1 ]; then
+            local ndb=0 nok=0 d
+            while IFS= read -r d; do
+                [ -n "$d" ] || continue
+                ndb=$((ndb + 1))
+                [ "$(nss_state "$d")" = absent ] || nok=$((nok + 1))
+            done <<EOF
+$(nss_databases)
+EOF
+            if [ "$nok" = 0 ]; then
+                bad "there are pkcs11 provisions but no NSS database has a p11-kit proxy; no browser will see them"
+            elif [ "$nok" -lt "$ndb" ]; then
+                # A Firefox profile created after the provision is normal and
+                # is not a fault: say what to run, do not cry wolf.
+                ok "the proxy is in $nok of $ndb NSS database(s); re-run 'sora provide pkcs11' to cover the rest"
+            else
+                ok "the proxy is registered in all $ndb NSS database(s)"
+            fi
         fi
     fi
 
@@ -3461,7 +3558,9 @@ Publish a box resource to the host
                                    a PKCS#11 token driver that lives in a box,
                                    usable by the host's browsers. Writes a
                                    p11-kit module file and registers the host's
-                                   p11-kit-proxy.so in ~/.pki/nssdb.
+                                   p11-kit-proxy.so in ~/.pki/nssdb and in every
+                                   Firefox profile (Firefox keeps one NSS
+                                   database per profile; Chromium shares one).
   sora provide native-messaging <host-name> --box <box> [--as <name>]
                                    [--browsers <list>] [--extension-id <id>]...
                                    a browser signing helper that lives in a

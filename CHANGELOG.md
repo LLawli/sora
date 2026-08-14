@@ -11,6 +11,29 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ### Added
 
+- `sora provide pkcs11` now registers the proxy in every Firefox profile, not
+  only in the shared `~/.pki/nssdb`. Firefox keeps one NSS database per
+  profile, so until now the module file was written and no Firefox saw it.
+
+  Both profile roots are scanned: Firefox 147 moved the profile to
+  `$XDG_CONFIG_HOME/mozilla/firefox` and the two coexist, because an upgraded
+  install keeps the old path. A profile is a directory containing `prefs.js`,
+  not something read out of `profiles.ini`, which takes relative paths and
+  never lists a hand-made profile.
+
+  A profile that already carries a p11-kit proxy registered by something else
+  is reported and left alone, and removal spares it too. Success is taken from
+  re-reading `pkcs11.txt`, never from modutil's exit status: a `-rawadd` into a
+  profile that was never opened is silently dropped, so the database is created
+  first.
+
+  Flatpak browsers are still not covered, and that is a division of labour
+  rather than an omission: inside a sandbox flatpak writes `user-config: none`
+  and no user module is read at all, so that case needs `p11-kit-client.so`
+  instead. Tracked in the same issue.
+
+### Added
+
 - `sora box create` gained `--additional-flags` (repeatable) and `--nvidia`,
   so a GPU box is creatable through sora instead of only through `distrobox
   create` directly — which cost the metadata file, the index, the priority and

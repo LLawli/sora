@@ -297,9 +297,12 @@ library. Swapping `ssh` for `distrobox enter` is the whole trick. There is no
 daemon and no socket — p11-kit starts the command on demand and it dies with
 the consumer.
 
-The `--no-nss` flag skips the `~/.pki/nssdb` registration, which is what makes
-Chromium, Brave and Chrome see the module (Firefox has its own per-profile
-database). That registration is a singleton: it is written once however many
+The `--no-nss` flag skips the NSS registration, which is what makes browsers
+see the module. Chromium, Brave and Chrome share one database at
+`~/.pki/nssdb`; **Firefox keeps one per profile**, so sora registers into every
+profile it finds (both `~/.mozilla/firefox` and `$XDG_CONFIG_HOME/mozilla/firefox`
+— Firefox 147 moved the profile and the two coexist). A profile that already
+has a p11-kit proxy registered by something else is left alone. That registration is a singleton: it is written once however many
 modules you publish, and removed when the last one goes. sora will not touch a
 p11-kit proxy it did not register.
 

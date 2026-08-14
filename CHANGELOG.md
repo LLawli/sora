@@ -9,6 +9,18 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ## [Unreleased]
 
+### Fixed
+
+- `sora provide native-messaging` no longer writes into the leftover config
+  tree of an uninstalled Flatpak. A directory under `~/.var/app` outlives the
+  Flatpak, so discovery keyed on directories alone produced a manifest and an
+  executable shim for a sandbox that no longer exists. Installed apps are now
+  checked with a read-only `flatpak list` before writing.
+
+  The filter is on the write path only, deliberately: an app uninstalled
+  *after* sora wrote to it must still be cleaned up by `provide remove`, so
+  discovery keeps reporting every directory. Both directions are tested.
+
 ## [0.3.0] - 2026-08-13
 
 ### Added

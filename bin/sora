@@ -2343,6 +2343,31 @@ nm_flatpak_app() { # dir -> app id
     esac
 }
 
+# Is this Flatpak app actually installed?
+#
+# A directory under ~/.var/app OUTLIVES the Flatpak: uninstalling leaves the
+# app's config tree behind. Discovery keyed on directories alone therefore
+# writes a manifest and an executable shim for a sandbox that no longer exists.
+#
+# This is deliberately NOT folded into nm_manifest_dirs, which also feeds
+# removal and counting: an app uninstalled AFTER sora wrote to it must still be
+# cleaned up, so the filter belongs on the write path only.
+#
+# 'flatpak list' is read-only and asks nothing of the sandbox. The answer is
+# cached because discovery runs once per browser family.
+NM_FLATPAK_APPS=''
+nm_flatpak_installed() { # app-id
+    if [ -z "$NM_FLATPAK_APPS" ]; then
+        command -v flatpak >/dev/null 2>&1 || { NM_FLATPAK_APPS=$TAB; return 1; }
+        NM_FLATPAK_APPS=$TAB$(flatpak list --app --columns=application 2>/dev/null |
+            tr '\n' "$TAB")
+    fi
+    case $NM_FLATPAK_APPS in
+        *"$TAB$1$TAB"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # Where a Flatpak browser's shim lives: inside the app's own config tree, which
 # is always readable from inside its sandbox without any filesystem grant.
 nm_flatpak_shim() { # manifest-dir host-name -> shim path
@@ -2786,6 +2811,15 @@ EOF
         while IFS=$TAB read -r kind dir; do
             [ -n "$dir" ] || continue
             [ -n "$browsers" ] && ! nm_browser_wanted "$dir" "$browsers" && continue
+            # The directory outlives the Flatpak, so its existence is not
+            # evidence that the app is there to read what we would write.
+            if [ "$kind" = flatpak ]; then
+                app=$(nm_flatpak_app "$dir") || continue
+                if ! nm_flatpak_installed "$app"; then
+                    info "skipping $app: the directory is left over, the Flatpak is not installed"
+                    continue
+                fi
+            fi
             dest="$dir/$hostname.json"
             mkdir -p "$dir" 2>/dev/null || { warn "cannot create $dir"; continue; }
             if [ -f "$dest" ] && ! nm_is_ours "$dest" "$wrapper"; then

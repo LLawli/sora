@@ -82,9 +82,20 @@ case "\$1" in
 esac
 EOF
 
-# sora must never execute flatpak: it prints the override command and leaves
-# the decision to the user. This turns a regression red instead of silent.
-printf '#!/bin/sh\necho "sora EXECUTED flatpak: $*" >&2\nexit 1\n' > "$STUB_BIN/flatpak"
+# Reading is allowed, changing permissions is not. 'flatpak list' answers which
+# apps are installed, which sora needs because a directory under ~/.var/app
+# outlives the Flatpak. Anything that MUTATES - override above all - still fails
+# loudly, so "sora ran flatpak override itself" turns the suite red.
+FLATPAK_APPS="$SANDBOX/flatpak-apps"
+printf 'com.brave.Browser\n' > "$FLATPAK_APPS"
+cat > "$STUB_BIN/flatpak" <<EOF
+#!/bin/sh
+case "\$1" in
+    list) cat "$FLATPAK_APPS" ;;
+    info) grep -qx "\$2" "$FLATPAK_APPS" ;;
+    *)    echo "sora EXECUTED flatpak: \$*" >&2; exit 1 ;;
+esac
+EOF
 chmod +x "$STUB_BIN/podman" "$STUB_BIN/distrobox" "$STUB_BIN/flatpak"
 
 field() { "$XDG_DATA_HOME/sora/libexec/sora-json-path" get "$1" "$2"; }
@@ -234,6 +245,33 @@ assert_contains "$out" "com.lacunasoftware.webpki" "the error lists what the box
 out=$("$SORA_BIN" provide native-messaging 'Bad/Name' --box advbr 2>&1) &&
     fail "an invalid host name must be refused"
 assert_contains "$out" "may only contain" "the charset is named"
+
+# --- a leftover ~/.var/app directory is not a Flatpak ------------------------
+# Uninstalling a Flatpak leaves its config tree behind. Writing there produces a
+# manifest and an executable shim for a sandbox that does not exist, which is
+# what happened on the development machine with an uninstalled Brave.
+"$SORA_BIN" provide remove sora-advbr-com.lacunasoftware.webpki >/dev/null 2>&1
+rm -f "$FL_DEST" "$SHIM"
+: > "$FLATPAK_APPS"                       # nothing installed any more
+out=$("$SORA_BIN" provide native-messaging com.lacunasoftware.webpki --box advbr 2>&1) ||
+    fail "publishing with an orphan flatpak dir failed: $out"
+[ -f "$FL_DEST" ] && fail "wrote a manifest for an uninstalled Flatpak"
+[ -e "$SHIM" ] && fail "wrote a shim for an uninstalled Flatpak"
+assert_contains "$out" "the directory is left over" "the skip is reported, not silent"
+[ -f "$C_DEST" ] || fail "the native profiles must still be written"
+assert_not_contains "$out" "flatpak override" "no override hint for an app that is gone"
+
+# But an app uninstalled AFTER sora wrote to it must still be cleaned up: the
+# filter belongs on the write path, never on discovery.
+printf 'com.brave.Browser\n' > "$FLATPAK_APPS"
+"$SORA_BIN" provide remove sora-advbr-com.lacunasoftware.webpki >/dev/null 2>&1
+out=$("$SORA_BIN" provide native-messaging com.lacunasoftware.webpki --box advbr 2>&1) || fail "$out"
+[ -f "$FL_DEST" ] || fail "precondition: the flatpak manifest should exist"
+: > "$FLATPAK_APPS"                       # the user uninstalls it now
+out=$("$SORA_BIN" provide remove sora-advbr-com.lacunasoftware.webpki 2>&1) || fail "$out"
+[ -e "$FL_DEST" ] && fail "removal skipped a manifest because the app was gone"
+[ -e "$SHIM" ] && fail "removal left the shim behind"
+printf 'com.brave.Browser\n' > "$FLATPAK_APPS"
 
 # --- --extension-id ----------------------------------------------------------
 # The one operation that relaxes the byte-for-byte guarantee, so it is explicit

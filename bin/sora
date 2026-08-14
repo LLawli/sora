@@ -1052,6 +1052,7 @@ install_inbox_hooks() { # box pm-binary
 cmd_box_create() {
     local name='' image='' priority=0 own_home=1 xdg_links=1 pm_override=''
     local hides=() h flags boxhome pm count
+    local extra_flags=() use_nvidia=0
 
     while [ $# -gt 0 ]; do
         case $1 in
@@ -1061,6 +1062,9 @@ cmd_box_create() {
             --no-own-home)    own_home=0 ;;
             --no-xdg-links)   xdg_links=0 ;;
             --hide)           hides+=("${2:?--hide needs a path}"); shift ;;
+            --additional-flags|-a)
+                              extra_flags+=("${2:?--additional-flags needs a value}"); shift ;;
+            --nvidia)         use_nvidia=1 ;;
             -*)               die "unknown option for 'box create': $1" ;;
             *)                [ -z "$name" ] && name=$1 || die "unexpected argument: $1" ;;
         esac
@@ -1100,6 +1104,21 @@ cmd_box_create() {
         done
         create_args+=(--additional-flags "${flags% }")
     fi
+    # distrobox ACCUMULATES --additional-flags rather than replacing, so what
+    # the user asks for is simply appended to whatever --hide contributed;
+    # there is no string to merge and no ordering to get right.
+    #
+    # These go to the CONTAINER MANAGER (podman/docker) - devices, extra
+    # volumes, a CDI reference. sora stays out of what they mean, the same way
+    # it treats an image reference as opaque.
+    for h in "${extra_flags[@]}"; do
+        create_args+=(--additional-flags "$h")
+    done
+    # --nvidia is NOT a container-manager flag and cannot be passed as one: it
+    # is distrobox's own, and it is what bind-mounts the host driver into the
+    # guest. The nvidia/cuda images ship the toolkit and never the driver, so
+    # without it CUDA initialises and finds no device.
+    [ "$use_nvidia" = 1 ] && create_args+=(--nvidia)
 
     info "creating box '$name' from $image ..."
     distrobox "${create_args[@]}" || die "distrobox create failed"
@@ -3392,7 +3411,11 @@ sora — distrobox commands as if they were native host commands
 Boxes
   sora box create <name> --image <image|alias> [--priority N]
                   [--pkg-manager PM] [--no-own-home] [--no-xdg-links]
-                  [--hide PATH]...
+                  [--hide PATH]... [--additional-flags FLAGS]... [--nvidia]
+                                   --additional-flags reaches the container
+                                   manager (devices, volumes, CDI); --nvidia is
+                                   distrobox's own, and is what injects the
+                                   host driver
   sora box list
   sora box enter <name>
   sora box rm <name> [--yes] [--delete-home]

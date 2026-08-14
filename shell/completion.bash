@@ -52,8 +52,8 @@ _sora() {
             mapfile -t COMPREPLY < <(compgen -W \
                 "fedora ubuntu debian arch tumbleweed alpine" -- "$cur")
             return ;;
-        --priority|--pkg-manager|--hide)
-            return ;;   # free-form: an integer, a pm name, a path
+        --priority|--pkg-manager|--hide|--additional-flags)
+            return ;;   # free-form: an integer, a pm name, a path, container flags
         --categories)
             mapfile -t COMPREPLY < <(compgen -W \
                 "Network;WebBrowser; Development; Graphics; AudioVideo; \
@@ -101,7 +101,8 @@ _sora() {
                 create)
                     mapfile -t COMPREPLY < <(compgen -W \
                         "--image --priority --pkg-manager --no-own-home \
-                         --no-xdg-links --hide" -- "$cur") ;;
+                         --no-xdg-links --hide --additional-flags --nvidia" \
+                         -- "$cur") ;;
                 enter|rm|set-priority)
                     # Only the box name; rm also takes flags.
                     if [ "$COMP_CWORD" -eq $((i + 2)) ]; then

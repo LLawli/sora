@@ -9,6 +9,23 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ## [Unreleased]
 
+### Added
+
+- `sora box create` gained `--additional-flags` (repeatable) and `--nvidia`,
+  so a GPU box is creatable through sora instead of only through `distrobox
+  create` directly — which cost the metadata file, the index, the priority and
+  the package-manager hook, i.e. everything sora adds.
+
+  They are two seams because they target two different programs:
+  `--additional-flags` reaches the container manager, while `--nvidia` is
+  distrobox's own and is what bind-mounts the host driver. Passing the latter
+  through the former would hand `--nvidia` to podman, which does not know it,
+  and the box would come up with the CUDA toolkit, no driver and no error.
+
+  `--hide` no longer owns `--additional-flags`: distrobox accumulates the
+  option, so the user's flags are appended alongside the tmpfs mounts rather
+  than replacing them.
+
 ### Fixed
 
 - `sora provide native-messaging` no longer writes into the leftover config

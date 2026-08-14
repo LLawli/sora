@@ -112,6 +112,21 @@ $ sora box rm archbox [--delete-home]
   (disable with `--no-xdg-links`), resolved with `xdg-user-dir` because the
   folders are localized ("Documentos", "Imagens"…).
 
+**Creation flags.** Two seams, because they target two different programs.
+`--additional-flags` goes to the *container manager* (podman/docker) and is
+repeatable, for devices, extra volumes or a CDI reference. `--nvidia` is
+*distrobox's own*, and is what bind-mounts the host driver into the guest:
+
+```console
+$ sora box create cuda --image nvidia/cuda:12.4.0-devel-ubuntu22.04 --nvidia
+$ sora box create rocm --image debian -a '--device /dev/kfd' -a '--device /dev/dri'
+```
+
+The distinction matters: passing `--additional-flags "--nvidia"` would hand
+`--nvidia` to podman, which does not know it, and the box would come up with the
+CUDA toolkit, no driver and no error. sora stays out of what these flags mean,
+the same way it treats an image reference as opaque.
+
 Box metadata lives in `~/.config/sora/boxes/<box>.toml`: source image,
 package-manager family (detected by **binary presence** inside the box, never
 guessed from the image name; override with `--pkg-manager`), box home, index

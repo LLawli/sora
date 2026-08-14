@@ -56,6 +56,12 @@ out=$(complete_bash sora box rm --yes "")
 assert_contains "$out" "--delete-home" "'box rm' offers its flags"
 out=$(complete_bash sora box create --image "")
 assert_contains "$out" "tumbleweed" "--image offers the alias catalog"
+out=$(complete_bash sora box create -)
+assert_contains "$out" "--nvidia" "'box create' offers --nvidia"
+assert_contains "$out" "--additional-flags" "'box create' offers --additional-flags"
+# Container-manager flags are free-form; offering box names would be nonsense.
+out=$(complete_bash sora box create --additional-flags "")
+assert_not_contains "$out" "alpha" "--additional-flags does not fall back to box names"
 
 # --- value-taking options decide on their own, wherever they sit -------------
 out=$(complete_bash sora anxious --box "")
@@ -181,6 +187,8 @@ if command -v fish >/dev/null 2>&1; then
     assert_not_contains "$out" "CHANGELOG" "fish: --box must not fall back to filenames"
     out=$(fish_complete 'sora box create --image ')
     assert_contains "$out" "tumbleweed" "fish: --image offers the alias catalog"
+    out=$(fish_complete 'sora box create --additional-flags ')
+    assert_not_contains "$out" "CHANGELOG" "fish: --additional-flags must not fall back to filenames"
     assert_not_contains "$out" "CHANGELOG" "fish: --image must not fall back to filenames"
     out=$(fish_complete 'sora which apt-')
     assert_contains "$out" "apt-cache" "fish: 'which' offers indexed commands"

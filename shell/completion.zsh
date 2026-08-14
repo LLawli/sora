@@ -67,6 +67,8 @@ _sora() {
                                 '--pkg-manager[override detection]:pm:(dnf5 apt-get pacman zypper apk)' \
                                 '--no-own-home[share the host home]' \
                                 '--no-xdg-links[skip XDG folder symlinks]' \
+                                '*--additional-flags[flags for the container manager]:flags:' \
+                                '--nvidia[inject the host NVIDIA driver]' \
                                 '--hide[mask a path with tmpfs]:path:_files' ;;
                             enter|set-priority) _sora_boxes ;;
                             rm) _alternative 'boxes:box:_sora_boxes' \

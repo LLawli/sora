@@ -112,6 +112,22 @@ O `sora box create` aplica dois defaults opinativos, ambos desligáveis:
   (desligue com `--no-xdg-links`), resolvidas com `xdg-user-dir` porque as
   pastas são localizadas ("Documentos", "Imagens"…).
 
+**Flags de criação.** São duas costuras, porque miram programas diferentes. O
+`--additional-flags` vai para o *gerenciador de containers* (podman/docker) e é
+repetível, para dispositivos, volumes extras ou uma referência CDI. O
+`--nvidia` é *do próprio distrobox*, e é ele que monta o driver do host dentro
+do guest:
+
+```console
+$ sora box create cuda --image nvidia/cuda:12.4.0-devel-ubuntu22.04 --nvidia
+$ sora box create rocm --image debian -a '--device /dev/kfd' -a '--device /dev/dri'
+```
+
+A distinção importa: passar `--additional-flags "--nvidia"` entregaria
+`--nvidia` ao podman, que não conhece essa flag, e a box subiria com o toolkit
+do CUDA, sem driver e sem erro. O sora não se mete no que essas flags
+significam, do mesmo jeito que trata a referência de imagem como opaca.
+
 Os metadados ficam em `~/.config/sora/boxes/<box>.toml`: imagem de origem,
 família do gerenciador de pacotes (detectada pela **presença do binário**
 dentro da box, nunca adivinhada pelo nome da imagem; sobrescrevível com

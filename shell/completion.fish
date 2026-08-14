@@ -80,6 +80,10 @@ complete -c sora -n '__fish_seen_subcommand_from box; and __fish_seen_subcommand
 complete -c sora -n '__fish_seen_subcommand_from box; and __fish_seen_subcommand_from create' \
     -l no-xdg-links -d 'Skip XDG folder symlinks'
 complete -c sora -n '__fish_seen_subcommand_from box; and __fish_seen_subcommand_from create' \
+    -l additional-flags -x -d 'Flags for the container manager'
+complete -c sora -n '__fish_seen_subcommand_from box; and __fish_seen_subcommand_from create' \
+    -l nvidia -d 'Inject the host NVIDIA driver'
+complete -c sora -n '__fish_seen_subcommand_from box; and __fish_seen_subcommand_from create' \
     -l hide -r -d 'Mask a path with tmpfs'
 complete -c sora -n '__fish_seen_subcommand_from box; and __fish_seen_subcommand_from rm' \
     -l yes -d 'Do not ask'

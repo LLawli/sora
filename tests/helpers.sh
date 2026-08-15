@@ -20,10 +20,16 @@ setup_sandbox() {
     export XDG_CONFIG_HOME="$HOME/.config"
     export XDG_CACHE_HOME="$HOME/.cache"
     export XDG_DATA_HOME="$HOME/.local/share"
+    # The runtime dir belongs in the sandbox too. Without it a test reads the
+    # REAL /run/user/$UID, so "the p11-kit socket is not active" silently
+    # becomes "this machine has no socket right now" - green until something
+    # socket-activates it, then red.
+    export XDG_RUNTIME_DIR="$SANDBOX/run"
     mkdir -p "$HOME" \
         "$XDG_CONFIG_HOME/sora/boxes" \
         "$XDG_CACHE_HOME/sora/index.d" \
-        "$XDG_DATA_HOME/sora"
+        "$XDG_DATA_HOME/sora" \
+        "$XDG_RUNTIME_DIR"
     STUB_BIN="$SANDBOX/stubbin"
     mkdir -p "$STUB_BIN"
     export PATH="$STUB_BIN:$PATH"

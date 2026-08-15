@@ -34,8 +34,6 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
   the machine owner's decision. Removal does not revoke them either: sora did
   not grant them.
 
-### Added
-
 - `sora provide pkcs11` now registers the proxy in every Firefox profile, not
   only in the shared `~/.pki/nssdb`. Firefox keeps one NSS database per
   profile, so until now the module file was written and no Firefox saw it.
@@ -56,8 +54,6 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
   rather than an omission: inside a sandbox flatpak writes `user-config: none`
   and no user module is read at all, so that case needs `p11-kit-client.so`
   instead. Tracked in the same issue.
-
-### Added
 
 - `sora box create` gained `--additional-flags` (repeatable) and `--nvidia`,
   so a GPU box is creatable through sora instead of only through `distrobox

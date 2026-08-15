@@ -104,8 +104,30 @@ EOF
 printf '#!/bin/sh\necho "HOST modutil leaked into the fake box" >&2\nexit 1\n' \
     > "$STUB_BIN/modutil"
 
+# Reading is allowed; anything that changes permissions is not. sora prints the
+# socket and override commands and must never run them - the socket exposes
+# EVERY host PKCS#11 module to the sandbox, which is the machine owner's call.
+FLATPAK_APPS="$SANDBOX/flatpak-apps"
+RUNTIME_LOC="$SANDBOX/runtime"
+mkdir -p "$RUNTIME_LOC/files/lib/x86_64-linux-gnu/pkcs11"
+: > "$RUNTIME_LOC/files/lib/x86_64-linux-gnu/pkcs11/p11-kit-client.so"
+: > "$FLATPAK_APPS"
+cat > "$STUB_BIN/flatpak" <<EOF
+#!/bin/sh
+case "\$1 \$2" in
+    "list --app") cat "$FLATPAK_APPS" ;;
+    "info -m")    grep -qx "\$3" "$FLATPAK_APPS" && echo "runtime=org.freedesktop.Platform/x86_64/25.08" ;;
+    "info --show-location") echo "$RUNTIME_LOC" ;;
+    *) case "\$1" in
+           list) cat "$FLATPAK_APPS" ;;
+           info) grep -qx "\$2" "$FLATPAK_APPS" ;;
+           *) echo "sora EXECUTED flatpak: \$*" >&2; exit 1 ;;
+       esac ;;
+esac
+EOF
+printf '#!/bin/sh\necho "sora EXECUTED systemctl: $*" >&2\nexit 1\n' > "$STUB_BIN/systemctl"
 chmod +x "$STUB_BIN/podman" "$STUB_BIN/distrobox" "$STUB_BIN/modutil" \
-    "$BOXBIN/p11-kit" "$BOXBIN/modutil"
+    "$STUB_BIN/flatpak" "$STUB_BIN/systemctl" "$BOXBIN/p11-kit" "$BOXBIN/modutil"
 
 # sora-pkcs11's 'check' mode tests that the library exists inside the box, and
 # the fake box's filesystem is the host's, so the fixture is a real file under
@@ -382,5 +404,63 @@ for d in "$P1" "$P2" "$P3"; do
 done
 "$SORA_BIN" provide remove sora-advbr-quiet2 >/dev/null 2>&1
 rm -rf "$HOME/.mozilla" "$XDG_CONFIG_HOME/mozilla"
+
+# --- Flatpak browsers get the CLIENT, not the proxy --------------------------
+# A .module is useless inside a sandbox: flatpak writes 'user-config: none' into
+# every one of them, so no user module is read at all. p11-kit-client.so escapes
+# that because NSS loads it directly as a library.
+rm -rf "$NSSDB" "$MODULES" "$HOME/.mozilla" "$XDG_CONFIG_HOME/mozilla"
+printf 'com.brave.Browser\norg.mozilla.firefox\n' > "$FLATPAK_APPS"
+FB="$HOME/.var/app/com.brave.Browser/.pki/nssdb"
+FF="$HOME/.var/app/org.mozilla.firefox/config/mozilla/firefox/p1.default"
+GONE="$HOME/.var/app/com.leftover.App/.pki/nssdb"
+mkdir -p "$FB" "$FF" "$GONE"
+: > "$FF/prefs.js"
+
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label fp 2>&1) || fail "$out"
+
+grep -q "^name=sora-p11-kit-client$" "$FB/pkcs11.txt" 2>/dev/null ||
+    fail "the client was not registered in the Flatpak Chromium database"
+grep -q "^name=sora-p11-kit-client$" "$FF/pkcs11.txt" 2>/dev/null ||
+    fail "the client was not registered in the Flatpak Firefox profile"
+# The in-sandbox path, resolved through the runtime - not a host path.
+grep -q "^library=/usr/lib/x86_64-linux-gnu/pkcs11/p11-kit-client.so$" "$FB/pkcs11.txt" ||
+    fail "the registered library is not the runtime's client path"
+grep -q "^name=sora-p11-kit-proxy$" "$FB/pkcs11.txt" &&
+    fail "a sandbox database must get the client, never the proxy"
+[ -f "$GONE/pkcs11.txt" ] && fail "wrote into an uninstalled Flatpak's leftover directory"
+
+# Both permission steps are printed, never run.
+assert_contains "$out" "flatpak override --user --filesystem=xdg-run/p11-kit/pkcs11 com.brave.Browser" \
+    "the override command is printed"
+assert_contains "$out" "systemctl --user enable --now p11-kit-server.socket" \
+    "the socket command is printed"
+assert_not_contains "$out" "sora EXECUTED flatpak" "sora must not run flatpak itself"
+assert_not_contains "$out" "sora EXECUTED systemctl" "sora must not run systemctl itself"
+
+# --- idempotency and a foreign client ----------------------------------------
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label fp2 2>&1) || fail "$out"
+assert_eq "$(grep -c "^name=sora-p11-kit-client$" "$FB/pkcs11.txt")" "1" \
+    "re-providing did not duplicate the client stanza"
+
+FOREIGN="$HOME/.var/app/org.mozilla.firefox/config/mozilla/firefox/p2.default"
+mkdir -p "$FOREIGN"; : > "$FOREIGN/prefs.js"
+printf 'library=/usr/lib/pkcs11/p11-kit-client.so\nname=Someone Else\n\n' > "$FOREIGN/pkcs11.txt"
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label fp3 2>&1) || fail "$out"
+grep -q "^name=Someone Else$" "$FOREIGN/pkcs11.txt" || fail "a foreign client was destroyed"
+grep -q "^name=sora-p11-kit-client$" "$FOREIGN/pkcs11.txt" &&
+    fail "sora registered into a database that already had another client"
+
+# --- removal takes the client and spares the foreign one ---------------------
+"$SORA_BIN" provide remove sora-advbr-fp >/dev/null 2>&1
+"$SORA_BIN" provide remove sora-advbr-fp2 >/dev/null 2>&1
+out=$("$SORA_BIN" provide remove sora-advbr-fp3 2>&1) || fail "$out"
+for d in "$FB" "$FF"; do
+    grep -q "^name=sora-p11-kit-client$" "$d/pkcs11.txt" 2>/dev/null &&
+        fail "removal left the client in $d"
+done
+grep -q "^name=Someone Else$" "$FOREIGN/pkcs11.txt" || fail "removal destroyed a foreign client"
+assert_not_contains "$out" "sora EXECUTED flatpak" "removal must not revoke permissions"
+rm -rf "$HOME/.var"
 
 echo "ok: provide pkcs11"

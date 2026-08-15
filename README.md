@@ -302,7 +302,16 @@ see the module. Chromium, Brave and Chrome share one database at
 `~/.pki/nssdb`; **Firefox keeps one per profile**, so sora registers into every
 profile it finds (both `~/.mozilla/firefox` and `$XDG_CONFIG_HOME/mozilla/firefox`
 — Firefox 147 moved the profile and the two coexist). A profile that already
-has a p11-kit proxy registered by something else is left alone. That registration is a singleton: it is written once however many
+has a p11-kit proxy registered by something else is left alone.
+
+**Flatpak browsers get a different library.** flatpak writes `user-config: none`
+into every sandbox, so no user `.module` is read there at all; `p11-kit-client.so`
+escapes that because NSS loads it directly. sora registers it, resolved through
+the app's own runtime so the path is the one the sandbox sees, and prints the
+two commands it needs — enabling `p11-kit-server.socket` and granting the app
+`--filesystem=xdg-run/p11-kit/pkcs11`. Both loosen confinement, and the socket
+exposes every PKCS#11 module the host has, not only the box's, so sora never
+runs them for you. That registration is a singleton: it is written once however many
 modules you publish, and removed when the last one goes. sora will not touch a
 p11-kit proxy it did not register.
 

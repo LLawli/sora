@@ -2210,17 +2210,23 @@ nss_proxy_lib() {
     return 1
 }
 
-nss_ours() { grep -q "^name=$NSS_MODULE_NAME\$" "$1/pkcs11.txt" 2>/dev/null; }
+# A host database gets the PROXY; a database inside a Flatpak sandbox gets the
+# CLIENT, which is a different library doing a different job. Two names,
+# because ownership is derived from the name and confusing them would break the
+# rule that sora only ever touches what sora wrote.
+nss_ours() { grep -q "^name=${2:-$NSS_MODULE_NAME}\$" "$1/pkcs11.txt" 2>/dev/null; }
 
-nss_foreign_proxy() { grep -q 'p11-kit-proxy\.so' "$1/pkcs11.txt" 2>/dev/null; }
+nss_foreign_proxy() { # dbdir [library-substring]
+    grep -q "${2:-p11-kit-proxy\.so}" "$1/pkcs11.txt" 2>/dev/null
+}
 
 # One database is one of three things, read as TEXT rather than through
 # 'modutil -list', which would load the modules.
-nss_state() { # dbdir -> ours | foreign | absent
+nss_state() { # dbdir [name] [library-substring] -> ours | foreign | absent
     [ -f "$1/pkcs11.txt" ] || { printf 'absent\n'; return 0; }
-    if nss_ours "$1";           then printf 'ours\n'
-    elif nss_foreign_proxy "$1"; then printf 'foreign\n'
-    else                             printf 'absent\n'
+    if nss_ours "$1" "${2:-}";              then printf 'ours\n'
+    elif nss_foreign_proxy "$1" "${3:-}";   then printf 'foreign\n'
+    else                                         printf 'absent\n'
     fi
 }
 
@@ -2274,6 +2280,87 @@ nss_databases() {
     nss_firefox_profiles
 }
 
+# ---------------------------------------------------------------------------
+# Flatpak browsers
+#
+# A .module file is useless inside a sandbox: flatpak writes
+#   # Disable user pkcs11 config, because the host modules don't work in the runtime
+#   user-config: none
+# into /etc/pkcs11/pkcs11.conf of EVERY sandbox, from the flatpak binary rather
+# than the runtime, so it holds for every app on every distribution. A file in
+# the right place that nobody reads is worse than no file, because it looks
+# like configuration.
+#
+# p11-kit-client.so escapes that because NSS loads it directly as a library and
+# never consults the p11-kit user configuration. It talks to a p11-kit server
+# over $XDG_RUNTIME_DIR/p11-kit/pkcs11, and that server exports everything the
+# HOST has configured - including the remote modules 'provide pkcs11' wrote.
+#
+# Two things have to be true for it to work, and both loosen confinement, so
+# sora prints them and never runs them.
+# ---------------------------------------------------------------------------
+
+NSS_CLIENT_NAME="sora-p11-kit-client"
+NSS_P11_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/p11-kit/pkcs11"
+
+nss_socket_active() {
+    systemctl --user is-active p11-kit-server.socket >/dev/null 2>&1 ||
+        [ -S "$NSS_P11_SOCKET" ]
+}
+
+# The client as seen from INSIDE the sandbox: a runtime path, not a host one.
+# Resolved through the app's declared runtime and checked against that
+# runtime's installed tree, so we never write a path the sandbox does not have.
+# In freedesktop 25.08 the client is under .../pkcs11/ while the proxy is one
+# level up: they are interchangeable neither in place nor in function.
+nss_flatpak_client() { # app-id -> in-sandbox path
+    local runtime loc inner
+    command -v flatpak >/dev/null 2>&1 || return 1
+    runtime=$(flatpak info -m "$1" 2>/dev/null | sed -n 's/^runtime=//p' | head -n1)
+    [ -n "$runtime" ] || return 1
+    loc=$(flatpak info --show-location "runtime/$runtime" 2>/dev/null) || return 1
+    [ -n "$loc" ] || return 1
+    for inner in /usr/lib/x86_64-linux-gnu/pkcs11/p11-kit-client.so \
+        /usr/lib/aarch64-linux-gnu/pkcs11/p11-kit-client.so \
+        /usr/lib64/pkcs11/p11-kit-client.so \
+        /usr/lib/pkcs11/p11-kit-client.so; do
+        [ -e "$loc/files${inner#/usr}" ] && { printf '%s\n' "$inner"; return 0; }
+    done
+    return 1
+}
+
+# The NSS databases of one Flatpak browser. Chromium keeps a single one;
+# Firefox keeps one per profile, under both the old and the XDG root.
+nss_flatpak_dbs() { # app-id
+    local base rel root p
+    base="$HOME/.var/app/$1"
+    [ -d "$base/.pki/nssdb" ] && printf '%s\n' "$base/.pki/nssdb"
+    for rel in $NSS_FIREFOX_ROOTS; do
+        for root in "$base/$rel" "$base/config/${rel#.}"; do
+            [ -d "$root" ] || continue
+            for p in "$root"/*/prefs.js "$root"/*/*/prefs.js; do
+                [ -f "$p" ] && printf '%s\n' "${p%/prefs.js}"
+            done
+        done
+    done
+    return 0
+}
+
+# Installed Flatpak apps that look like a browser, i.e. that have a config tree
+# sora knows how to find a database in. Uninstalled leftovers are filtered by
+# nm_flatpak_installed, for the same reason the native-messaging adapter does
+# it: the directory outlives the Flatpak.
+nss_flatpak_apps() {
+    local dir app
+    for dir in "$HOME"/.var/app/*; do
+        [ -d "$dir" ] || continue
+        app=${dir##*/}
+        nm_flatpak_installed "$app" || continue
+        [ -n "$(nss_flatpak_dbs "$app")" ] && printf '%s\n' "$app"
+    done
+    return 0
+}
+
 # modutil lives inside a box, not on the host: the host's NSS database is
 # bind-mounted into every box at the same absolute path and uses the same sql:
 # format, so the box's modutil can write it - and the host does not need
@@ -2313,6 +2400,55 @@ nss_register() { # box
 $(nss_databases)
 EOF
     [ "$n" -gt 0 ] && info "the proxy is registered in $n NSS database(s)"
+    nss_register_flatpak "$1"
+    return 0
+}
+
+nss_register_flatpak() { # box
+    local app client db hinted=0 n=0
+    while IFS= read -r app; do
+        [ -n "$app" ] || continue
+        if ! client=$(nss_flatpak_client "$app"); then
+            warn "$app: no p11-kit-client.so in its runtime; skipping"
+            continue
+        fi
+        while IFS= read -r db; do
+            [ -n "$db" ] || continue
+            case $(nss_state "$db" "$NSS_CLIENT_NAME" 'p11-kit-client\.so') in
+                ours) n=$((n + 1)); continue ;;
+                foreign)
+                    info "$db already has a p11-kit client registered by something else; leaving it alone"
+                    continue ;;
+            esac
+            mkdir -p "$db"
+            [ -f "$db/pkcs11.txt" ] && nss_backup "$db"
+            distrobox enter --name "$1" -- \
+                "$SORA_DATA/libexec/sora-pkcs11" nss-add "$db" "$client" "$NSS_CLIENT_NAME" \
+                >/dev/null 2>&1 || true
+            if nss_ours "$db" "$NSS_CLIENT_NAME"; then
+                info "registered the p11-kit client in $db"
+                n=$((n + 1))
+            else
+                warn "could not register the p11-kit client in $db"
+            fi
+        done <<EOF2
+$(nss_flatpak_dbs "$app")
+EOF2
+        [ "$hinted" = 0 ] && {
+            hinted=1
+            # Both of these loosen confinement, and the socket exposes EVERY
+            # PKCS#11 module the host has configured to the sandbox, not only
+            # the box's. That is the machine owner's call, so sora prints and
+            # never runs them.
+            nss_socket_active ||
+                info "the p11-kit socket is not active; run:  systemctl --user enable --now p11-kit-server.socket"
+        }
+        info "for the Flatpak browser $app, run:"
+        info "  flatpak override --user --filesystem=xdg-run/p11-kit/pkcs11 $app"
+    done <<EOF
+$(nss_flatpak_apps)
+EOF
+    [ "$n" -gt 0 ] && info "the p11-kit client is registered in $n Flatpak database(s)"
     return 0
 }
 
@@ -2360,6 +2496,32 @@ nss_unregister() { # box
 $(nss_databases)
 EOF
     [ "$n" -gt 0 ] && info "removed $NSS_MODULE_NAME from $n NSS database(s)"
+    # Flatpak databases carry the client, not the proxy, so they are undone
+    # under their own name. Permissions are NOT revoked: sora did not grant
+    # them, and something else may rely on them.
+    local app db m=0
+    while IFS= read -r app; do
+        [ -n "$app" ] || continue
+        while IFS= read -r db; do
+            [ -n "$db" ] || continue
+            [ "$(nss_state "$db" "$NSS_CLIENT_NAME" 'p11-kit-client\.so')" = ours ] || continue
+            nss_backup "$db"
+            distrobox enter --name "$box" -- \
+                "$SORA_DATA/libexec/sora-pkcs11" nss-del "$db" "$NSS_CLIENT_NAME" \
+                >/dev/null 2>&1 || true
+            if nss_ours "$db" "$NSS_CLIENT_NAME"; then
+                warn "could not remove $NSS_CLIENT_NAME from $db"
+                warn "remove it by hand with:  modutil -delete $NSS_CLIENT_NAME -dbdir sql:$db"
+            else
+                m=$((m + 1))
+            fi
+        done <<EOF2
+$(nss_flatpak_dbs "$app")
+EOF2
+    done <<EOF
+$(nss_flatpak_apps)
+EOF
+    [ "$m" -gt 0 ] && info "removed $NSS_CLIENT_NAME from $m Flatpak database(s)"
     return 0
 }
 
@@ -3561,6 +3723,9 @@ Publish a box resource to the host
                                    p11-kit-proxy.so in ~/.pki/nssdb and in every
                                    Firefox profile (Firefox keeps one NSS
                                    database per profile; Chromium shares one).
+                                   A Flatpak browser gets p11-kit-client.so
+                                   instead, and the two commands it needs are
+                                   printed, never run.
   sora provide native-messaging <host-name> --box <box> [--as <name>]
                                    [--browsers <list>] [--extension-id <id>]...
                                    a browser signing helper that lives in a

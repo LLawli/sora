@@ -11,6 +11,31 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ### Added
 
+- `sora provide pkcs11` now reaches Flatpak browsers too, which completes the
+  adapter: the module file, `~/.pki/nssdb`, every Firefox profile, and now
+  every Flatpak browser database.
+
+  A `.module` file is useless inside a sandbox. flatpak writes
+  `user-config: none` into `/etc/pkcs11/pkcs11.conf` of every sandbox, from the
+  flatpak binary rather than the runtime, so it holds for every app on every
+  distribution and no user module is read at all. `p11-kit-client.so` escapes
+  that because NSS loads it directly as a library, never consulting the p11-kit
+  user configuration. It is resolved through the app's declared runtime, so the
+  path written is the one the sandbox will actually see.
+
+  It is registered under its own name, `sora-p11-kit-client`, because it is a
+  different library doing a different job from the proxy, and ownership is
+  derived from the name.
+
+  The two steps that make it work both loosen confinement — enabling
+  `p11-kit-server.socket` and granting the app `--filesystem=xdg-run/p11-kit/pkcs11`
+  — so sora prints them and never runs them. The socket exposes every PKCS#11
+  module the host has configured to the sandbox, not only the box's, which is
+  the machine owner's decision. Removal does not revoke them either: sora did
+  not grant them.
+
+### Added
+
 - `sora provide pkcs11` now registers the proxy in every Firefox profile, not
   only in the shared `~/.pki/nssdb`. Firefox keeps one NSS database per
   profile, so until now the module file was written and no Firefox saw it.

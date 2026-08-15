@@ -306,7 +306,16 @@ módulo. Chromium, Brave e Chrome compartilham um banco em `~/.pki/nssdb`; o
 **Firefox tem um por perfil**, então o sora registra em todos os que encontrar
 (tanto `~/.mozilla/firefox` quanto `$XDG_CONFIG_HOME/mozilla/firefox` — o
 Firefox 147 mudou o caminho e os dois convivem). Perfil que já tem um proxy do
-p11-kit registrado por outra coisa não é tocado. Esse
+p11-kit registrado por outra coisa não é tocado.
+
+**Navegador Flatpak recebe outra biblioteca.** O flatpak escreve
+`user-config: none` em todo sandbox, então nenhum `.module` de usuário é lido
+lá; o `p11-kit-client.so` escapa disso porque o NSS o carrega direto. O sora o
+registra, resolvido pelo runtime do próprio app para que o caminho seja o que o
+sandbox enxerga, e imprime os dois comandos necessários: habilitar o
+`p11-kit-server.socket` e dar ao app `--filesystem=xdg-run/p11-kit/pkcs11`. Os
+dois afrouxam confinamento, e o socket expõe ao sandbox todos os módulos
+PKCS#11 do host, não só os da box, então o sora nunca os executa por você. Esse
 registro é singleton: é escrito uma vez só, não importa quantos módulos você
 publique, e é removido quando o último sai. O sora não mexe em proxy do p11-kit
 que ele não registrou.

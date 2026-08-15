@@ -9,6 +9,8 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-15
+
 ### Added
 
 - `sora provide pkcs11` now reaches Flatpak browsers too, which completes the

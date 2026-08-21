@@ -126,6 +126,41 @@ sh "$SANDBOX/pkcs11" >/dev/null 2>&1 &&
 sh "$SANDBOX/pkcs11" check >/dev/null 2>&1 &&
     fail "pkcs11 check must reject a missing library argument"
 
+# 'version' is the one mode sora also runs on the HOST, so both ends of the
+# 'p11-kit remote' pipe are measured by the same code. The PATH here holds the
+# text tools and nothing that could answer, which is why the package managers
+# below are the only thing that changes between assertions.
+NOPM="$SANDBOX/nopm"
+mkdir -p "$NOPM"
+for t in sed cut head; do p=$(command -v "$t") && ln -sf "$p" "$NOPM/$t"; done
+# Resolved before the PATH is narrowed: 'PATH=$NOPM sh ...' looks 'sh' up in
+# the NARROWED path and finds nothing, which fails as an empty answer and
+# would have read as "the helper printed nothing".
+SH=$(command -v sh)
+assert_eq "$(PATH=$NOPM "$SH" "$SANDBOX/pkcs11" version)" "unknown" \
+    "pkcs11: an unanswerable version is 'unknown', never a guess"
+
+printf '#!/bin/sh\nprintf 1:0.25.5-3\n' > "$NOPM/dpkg-query"
+chmod 0755 "$NOPM/dpkg-query"
+assert_eq "$(PATH=$NOPM "$SH" "$SANDBOX/pkcs11" version)" "0.25.5" \
+    "pkcs11: the epoch and the distribution release are not part of the version"
+
+# The trap this exists for: 'package p11-kit is not installed' is prose, and a
+# parser that strips non-digits from anywhere in it reads the '11' out of
+# 'p11-kit' and reports version 11. A candidate that does not START with a
+# digit has to yield nothing and fall through to the next one.
+printf '#!/bin/sh\necho "package p11-kit is not installed"\nexit 1\n' > "$NOPM/rpm"
+chmod 0755 "$NOPM/rpm"
+assert_eq "$(PATH=$NOPM "$SH" "$SANDBOX/pkcs11" version)" "0.25.5" \
+    "pkcs11: a package manager's prose falls through instead of becoming a number"
+
+# A 'command -v' that fails must not leave the previous candidate's answer in
+# place: an image carrying both rpm and dpkg would otherwise report whichever
+# one ran last rather than whichever one knows.
+rm -f "$NOPM/dpkg-query"
+assert_eq "$(PATH=$NOPM "$SH" "$SANDBOX/pkcs11" version)" "unknown" \
+    "pkcs11: a failed candidate does not inherit the previous one's answer"
+
 # sora-json-path is the one generated helper that runs on the HOST. Its own
 # behaviour is covered by tests/test_json_path.sh; here it only has to be
 # well-formed and free of generator leakage.

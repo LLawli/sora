@@ -315,6 +315,15 @@ runs them for you. That registration is a singleton: it is written once however 
 modules you publish, and removed when the last one goes. sora will not touch a
 p11-kit proxy it did not register.
 
+**Both ends of the pipe have to run the same p11-kit.** Remoting forwards the
+PKCS#11 function table, and when the versions disagree nothing refuses at
+connect time: the slots enumerate, the PIN is accepted, the keys are found, and
+only the signature fails, with `CKR_DEVICE_ERROR`. A Fedora host at 0.26.4 with
+a Debian trixie box at 0.25.5 authenticates and cannot sign; the same host with
+a Fedora 44 box at 0.26.2 signs. So sora reads the version on both sides while
+publishing and says so — the module is still good for authentication, and
+matching the versions is the fix.
+
 The second adapter covers the other half of the smartcard problem:
 
 ```console

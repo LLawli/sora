@@ -463,4 +463,54 @@ grep -q "^name=Someone Else$" "$FOREIGN/pkcs11.txt" || fail "removal destroyed a
 assert_not_contains "$out" "sora EXECUTED flatpak" "removal must not revoke permissions"
 rm -rf "$HOME/.var"
 
+# --- host/box p11-kit version mismatch ---------------------------------------
+# 'p11-kit remote' forwards the PKCS#11 function table over a pipe and the two
+# ends have to agree. When they do not, nothing refuses at connect time: the
+# slots enumerate, the PIN is accepted, the keys are found, and only C_SignInit
+# fails with CKR_DEVICE_ERROR. So the check has to run at publish time - by
+# signature time nobody is looking at p11-kit any more.
+rm -rf "$NSSDB" "$MODULES"
+: > "$FLATPAK_APPS"
+# The host answers through rpm, the box through dpkg-query, which is the real
+# shape of the failing pair: Fedora host, Debian box. The box's PATH is $BOXBIN
+# and nothing else, so the two sides cannot answer through the same tool by
+# accident.
+printf '#!/bin/sh\nprintf 0.26.4-1.fc44\n' > "$STUB_BIN/rpm"
+chmod 0755 "$STUB_BIN/rpm"
+box_p11_version() { # version
+    printf '#!/bin/sh\nprintf %s\n' "$1" > "$BOXBIN/dpkg-query"
+    chmod 0755 "$BOXBIN/dpkg-query"
+}
+
+box_p11_version '0.25.5-3'
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label ver1 2>&1) ||
+    fail "a version mismatch must not fail the provision: $out"
+assert_contains "$out" "host p11-kit 0.26.4, box 'advbr' p11-kit 0.25.5" \
+    "the warning names both versions and the box"
+assert_contains "$out" "CKR_DEVICE_ERROR" "the warning names the error that will be seen"
+[ -f "$MODULES/sora-advbr-ver1.module" ] ||
+    fail "the warning is advisory; the module file must still be written"
+"$SORA_BIN" provide remove sora-advbr-ver1 >/dev/null 2>&1
+
+# 0.26.4 host with a 0.26.2 box is a pair that signs, so the comparison is on
+# the series and a patch-level difference says nothing.
+box_p11_version '0.26.2-1'
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label ver2 2>&1) || fail "$out"
+assert_not_contains "$out" "CKR_DEVICE_ERROR" "a patch-level difference is not a mismatch"
+"$SORA_BIN" provide remove sora-advbr-ver2 >/dev/null 2>&1
+
+box_p11_version '1:0.26.4-3'
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label ver3 2>&1) || fail "$out"
+assert_not_contains "$out" "CKR_DEVICE_ERROR" \
+    "an epoch belongs to the packaging, not to p11-kit"
+"$SORA_BIN" provide remove sora-advbr-ver3 >/dev/null 2>&1
+
+# A box whose package manager cannot answer says nothing at all: a warning
+# nobody can act on is noise.
+rm -f "$BOXBIN/dpkg-query"
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label ver4 2>&1) || fail "$out"
+assert_not_contains "$out" "CKR_DEVICE_ERROR" "an unknown version is silent"
+"$SORA_BIN" provide remove sora-advbr-ver4 >/dev/null 2>&1
+rm -f "$STUB_BIN/rpm"
+
 echo "ok: provide pkcs11"

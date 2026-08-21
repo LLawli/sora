@@ -315,6 +315,20 @@ runs them for you. That registration is a singleton: it is written once however 
 modules you publish, and removed when the last one goes. sora will not touch a
 p11-kit proxy it did not register.
 
+**A Flatpak app that is not a browser needs `--flatpak-app`.** NSS is one way an
+application finds a PKCS#11 module; loading a `.so` by path is another, and only
+the first leaves a database behind for sora to discover. A Java application on
+`SunPKCS11` — PJeOffice Pro, the CNJ's signing app, is the case this was built
+against — has no database anywhere, so discovery structurally cannot see it. But
+the socket and the override are exactly what it needs: flatpak already writes a
+`p11-kit-trust.module` pointing at `p11-kit-client.so` into every sandbox, and
+swapping the socket makes that same module serve everything the host's p11-kit
+knows, including a `remote:` module aimed into a box. `--flatpak-app <id>` names
+what discovery cannot find; the app gets those two commands, and a registration
+only if it does turn out to have a database. It works with `--no-nss` too:
+that flag means "do not touch NSS", and neither of those commands is an NSS
+matter.
+
 **Both ends of the pipe have to run the same p11-kit.** Remoting forwards the
 PKCS#11 function table, and when the versions disagree nothing refuses at
 connect time: the slots enumerate, the PIN is accepted, the keys are found, and

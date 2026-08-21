@@ -37,6 +37,19 @@ function __sora_indexed
     test -r $i; and cut -f1 -- $i
 end
 
+# Flatpak application IDs, read from ~/.var/app rather than from 'flatpak list'.
+# That directory is a glob with no process behind it, and it is the same place
+# 'provide pkcs11' looks. An app installed but never run has no directory yet
+# and so is not offered; typing its ID still works, which is the right trade
+# for a Tab that must not fork.
+function __sora_flatpak_apps
+    set -l d $HOME/.var/app
+    test -d $d; or return 0
+    for f in $d/*
+        test -d $f; and basename $f
+    end
+end
+
 function __sora_registry # anxious.list | delegate.list
     set -l f (__sora_config_dir)/$argv[1]
     test -r $f; and cut -f1 -- $f
@@ -144,6 +157,10 @@ complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcom
     -l label -x -d 'Short handle for this module'
 complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from pkcs11' \
     -l no-nss -d 'Skip the ~/.pki/nssdb registration'
+# Takes a value, so it needs -x: without it fish treats the flag as boolean and
+# the app ID falls through to the generic rule, which offers filenames.
+complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from pkcs11' \
+    -l flatpak-app -x -a '(__sora_flatpak_apps)' -d 'Also address this Flatpak app'
 complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from native-messaging' \
     -l box -x -a '(__sora_boxes)' -d 'Which box has the helper'
 complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from native-messaging' \

@@ -463,6 +463,84 @@ grep -q "^name=Someone Else$" "$FOREIGN/pkcs11.txt" || fail "removal destroyed a
 assert_not_contains "$out" "sora EXECUTED flatpak" "removal must not revoke permissions"
 rm -rf "$HOME/.var"
 
+# --- a Flatpak app with no NSS database --------------------------------------
+# NSS is not the only way an application loads a PKCS#11 module. A Java one on
+# SunPKCS11 takes a path to a .so and has no database anywhere, so discovery
+# cannot see it - and the socket and override commands, which are exactly what
+# it needs, used to be printed only from inside the discovery loop and went
+# missing with it.
+rm -rf "$NSSDB" "$MODULES" "$HOME/.var"
+PJE=br.jus.cnj.PJeOffice
+printf '%s\n' "$PJE" > "$FLATPAK_APPS"
+mkdir -p "$HOME/.var/app/$PJE"          # installed and used, no database at all
+
+# First the bug itself: unnamed, the app is invisible.
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label fa0 2>&1) || fail "$out"
+assert_not_contains "$out" "$PJE" "an app with no database is not discovered"
+"$SORA_BIN" provide remove sora-advbr-fa0 >/dev/null 2>&1
+
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label fa1 --flatpak-app "$PJE" 2>&1) ||
+    fail "--flatpak-app failed: $out"
+assert_contains "$out" "flatpak override --user --filesystem=xdg-run/p11-kit/pkcs11 $PJE" \
+    "the named app gets the override command"
+assert_contains "$out" "systemctl --user enable --now p11-kit-server.socket" \
+    "the socket command comes with it"
+assert_not_contains "$out" "sora EXECUTED flatpak" "sora must not run flatpak itself"
+assert_not_contains "$out" "sora EXECUTED systemctl" "sora must not run systemctl itself"
+[ -f "$HOME/.var/app/$PJE/.pki/nssdb/pkcs11.txt" ] &&
+    fail "sora invented an NSS database for an app that has none"
+"$SORA_BIN" provide remove sora-advbr-fa1 >/dev/null 2>&1
+
+# --- --no-nss keeps the hints for a NAMED app, and only for one --------------
+# --no-nss means "do not touch NSS". The socket and the override are not an NSS
+# matter, so naming an app still answers. Not naming one stays quiet: printing
+# override lines for every browser on the machine would answer a question
+# nobody asked.
+FB="$HOME/.var/app/com.brave.Browser/.pki/nssdb"
+mkdir -p "$FB"
+printf '%s\ncom.brave.Browser\n' "$PJE" > "$FLATPAK_APPS"
+rm -rf "$NSSDB"
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label fa2 --no-nss --flatpak-app "$PJE" 2>&1) ||
+    fail "$out"
+assert_contains "$out" "flatpak override --user --filesystem=xdg-run/p11-kit/pkcs11 $PJE" \
+    "--no-nss still answers for the app that was named"
+assert_not_contains "$out" "com.brave.Browser" \
+    "--no-nss does not volunteer every browser it found"
+[ -f "$NSSDB/pkcs11.txt" ] && fail "--no-nss wrote into the NSS database"
+[ -f "$FB/pkcs11.txt" ] && fail "--no-nss wrote into a Flatpak database"
+"$SORA_BIN" provide remove sora-advbr-fa2 >/dev/null 2>&1
+
+# --- naming an app that DOES have a database registers it as usual -----------
+# The flag says which app to address, not what to do with it. An app that turns
+# out to have a database gets the registration too, and is addressed once even
+# though it is both discovered and named.
+rm -rf "$NSSDB"
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label fa3 \
+    --flatpak-app com.brave.Browser 2>&1) || fail "$out"
+grep -q "^name=sora-p11-kit-client$" "$FB/pkcs11.txt" 2>/dev/null ||
+    fail "a named app with a database must still be registered"
+assert_eq "$(printf '%s\n' "$out" | grep -c "flatpak override .* com.brave.Browser")" "1" \
+    "an app that is both discovered and named is addressed once"
+"$SORA_BIN" provide remove sora-advbr-fa3 >/dev/null 2>&1
+
+# --- a named app is validated before anything is written ---------------------
+# The user typed this ID, so a typo is a mistake to report - not an app to skip
+# in silence the way discovery skips an uninstalled leftover.
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label fa4 \
+    --flatpak-app org.nope.NotInstalled 2>&1) &&
+    fail "an app that is not installed must fail"
+assert_contains "$out" "no installed Flatpak app" "the message names the problem"
+[ -f "$MODULES/sora-advbr-fa4.module" ] && fail "a failed precondition wrote a module file"
+grep -q 'sora-advbr-fa4' "$REG" 2>/dev/null && fail "a failed precondition wrote a registry row"
+
+# An ID is pasted into printed commands and joined onto a path, so it may only
+# be an ID.
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label fa5 \
+    --flatpak-app '../../etc' 2>&1) && fail "a path-like app ID must be refused"
+assert_contains "$out" "application ID" "the message says what the flag takes"
+rm -rf "$HOME/.var"
+: > "$FLATPAK_APPS"
+
 # --- host/box p11-kit version mismatch ---------------------------------------
 # 'p11-kit remote' forwards the PKCS#11 function table over a pipe and the two
 # ends have to agree. When they do not, nothing refuses at connect time: the

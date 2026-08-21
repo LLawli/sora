@@ -2434,6 +2434,11 @@ nss_flatpak_dbs() { # app-id
 # sora knows how to find a database in. Uninstalled leftovers are filtered by
 # nm_flatpak_installed, for the same reason the native-messaging adapter does
 # it: the directory outlives the Flatpak.
+#
+# This is DISCOVERY, and it can only find NSS consumers. An application that
+# loads a PKCS#11 module by path - a Java one on SunPKCS11, say - has no
+# database to find, which is why --flatpak-app exists: a human names what
+# discovery structurally cannot see.
 nss_flatpak_apps() {
     local dir app
     for dir in "$HOME"/.var/app/*; do
@@ -2460,7 +2465,7 @@ nss_modutil_box() { # preferred
     return 1
 }
 
-nss_register() { # box
+nss_register() { # box [named-flatpak-app]
     local proxy db n=0 skipped=0
     if ! proxy=$(nss_proxy_lib); then
         warn "p11-kit-proxy.so was not found on the host; browsers will not see the module"
@@ -2484,40 +2489,76 @@ nss_register() { # box
 $(nss_databases)
 EOF
     [ "$n" -gt 0 ] && info "the proxy is registered in $n NSS database(s)"
-    nss_register_flatpak "$1"
+    nss_register_flatpak "$1" 1 "${2:-}"
     return 0
 }
 
-nss_register_flatpak() { # box
-    local app client db hinted=0 n=0
+# Every Flatpak app this run has something to say to: the ones discovery found,
+# plus the one the user named. An app can be in both lists and must be handled
+# once, so the union is deduplicated here rather than guarded at each use.
+nss_flatpak_targets() { # named-app (may be empty)
+    { nss_flatpak_apps; [ -n "${1:-}" ] && printf '%s\n' "$1"; } |
+        awk 'NF && !seen[$0]++'
+}
+
+# Two jobs that used to be one, split along the line that actually divides
+# them:
+#
+#   - registering p11-kit-client.so in an NSS database is browser-specific and
+#     needs a database to write into;
+#   - the socket and the --filesystem override are what ANY Flatpak app needs
+#     to see the host's p11-kit, whatever it does with the module afterwards.
+#
+# They were entangled because the hints lived inside the registration loop, so
+# an app with no NSS database - PJeOffice Pro, a Java application that loads a
+# .so by path through SunPKCS11 - was dropped by discovery and took the two
+# instructions with it, even though those instructions were exactly right for
+# it. Naming the app is what puts it back.
+#
+# With registration off (--no-nss) only a NAMED app is addressed: printing
+# override lines for every browser on the machine would be answering a question
+# nobody asked, while naming an app IS the question.
+nss_register_flatpak() { # box register(0|1) [named-app]
+    local box=$1 reg=$2 app client db hinted=0 n=0 targets
+    if [ "$reg" = 1 ]; then
+        targets=$(nss_flatpak_targets "${3:-}")
+    else
+        targets=${3:-}
+    fi
     while IFS= read -r app; do
         [ -n "$app" ] || continue
+        # Checked even when nothing will be registered: flatpak writes a
+        # p11-kit-trust.module pointing at p11-kit-client.so into every
+        # sandbox, so a runtime without that library cannot reach the host's
+        # p11-kit at all and the two commands below would be a lie.
         if ! client=$(nss_flatpak_client "$app"); then
             warn "$app: no p11-kit-client.so in its runtime; skipping"
             continue
         fi
-        while IFS= read -r db; do
-            [ -n "$db" ] || continue
-            case $(nss_state "$db" "$NSS_CLIENT_NAME" 'p11-kit-client\.so') in
-                ours) n=$((n + 1)); continue ;;
-                foreign)
-                    info "$db already has a p11-kit client registered by something else; leaving it alone"
-                    continue ;;
-            esac
-            mkdir -p "$db"
-            [ -f "$db/pkcs11.txt" ] && nss_backup "$db"
-            distrobox enter --name "$1" -- \
-                "$SORA_DATA/libexec/sora-pkcs11" nss-add "$db" "$client" "$NSS_CLIENT_NAME" \
-                >/dev/null 2>&1 || true
-            if nss_ours "$db" "$NSS_CLIENT_NAME"; then
-                info "registered the p11-kit client in $db"
-                n=$((n + 1))
-            else
-                warn "could not register the p11-kit client in $db"
-            fi
-        done <<EOF2
+        if [ "$reg" = 1 ]; then
+            while IFS= read -r db; do
+                [ -n "$db" ] || continue
+                case $(nss_state "$db" "$NSS_CLIENT_NAME" 'p11-kit-client\.so') in
+                    ours) n=$((n + 1)); continue ;;
+                    foreign)
+                        info "$db already has a p11-kit client registered by something else; leaving it alone"
+                        continue ;;
+                esac
+                mkdir -p "$db"
+                [ -f "$db/pkcs11.txt" ] && nss_backup "$db"
+                distrobox enter --name "$box" -- \
+                    "$SORA_DATA/libexec/sora-pkcs11" nss-add "$db" "$client" "$NSS_CLIENT_NAME" \
+                    >/dev/null 2>&1 || true
+                if nss_ours "$db" "$NSS_CLIENT_NAME"; then
+                    info "registered the p11-kit client in $db"
+                    n=$((n + 1))
+                else
+                    warn "could not register the p11-kit client in $db"
+                fi
+            done <<EOF2
 $(nss_flatpak_dbs "$app")
 EOF2
+        fi
         [ "$hinted" = 0 ] && {
             hinted=1
             # Both of these loosen confinement, and the socket exposes EVERY
@@ -2527,10 +2568,10 @@ EOF2
             nss_socket_active ||
                 info "the p11-kit socket is not active; run:  systemctl --user enable --now p11-kit-server.socket"
         }
-        info "for the Flatpak browser $app, run:"
+        info "for the Flatpak app $app, run:"
         info "  flatpak override --user --filesystem=xdg-run/p11-kit/pkcs11 $app"
     done <<EOF
-$(nss_flatpak_apps)
+$targets
 EOF
     [ "$n" -gt 0 ] && info "the p11-kit client is registered in $n Flatpak database(s)"
     return 0
@@ -2915,12 +2956,13 @@ EOF
 }
 
 cmd_provide_pkcs11() {
-    local lib='' box='' label='' want_nss=1 name file pm probe boxver row exbox exlabel
+    local lib='' box='' label='' want_nss=1 fpapp='' name file pm probe boxver row exbox exlabel
     while [ $# -gt 0 ]; do
         case $1 in
             --box|-b) box=${2:?--box needs a value}; shift ;;
             --label)  label=${2:?--label needs a value}; shift ;;
             --no-nss) want_nss=0 ;;
+            --flatpak-app) fpapp=${2:?--flatpak-app needs a value}; shift ;;
             -*)       die "unknown option for 'provide pkcs11': $1" ;;
             *)        [ -z "$lib" ] && lib=$1 || die "unexpected argument: $1" ;;
         esac
@@ -2941,6 +2983,19 @@ cmd_provide_pkcs11() {
         *[[:space:]]*)
             die "the library path may not contain whitespace; p11-kit cannot quote it" ;;
     esac
+    # A named app is checked before anything is written: the user typed this
+    # id, so a typo is a mistake to report, not an app to silently skip the way
+    # discovery skips an uninstalled leftover.
+    if [ -n "$fpapp" ]; then
+        case $fpapp in
+            *[!A-Za-z0-9._-]*)
+                die "--flatpak-app takes an application ID, e.g. br.jus.cnj.PJeOffice" ;;
+        esac
+        command -v flatpak >/dev/null 2>&1 ||
+            die "--flatpak-app needs flatpak on the host"
+        nm_flatpak_installed "$fpapp" ||
+            die "no installed Flatpak app with the ID '$fpapp'"
+    fi
 
     need_cmd distrobox
     require_box "$box"
@@ -2995,7 +3050,13 @@ cmd_provide_pkcs11() {
     provide_write "$name" pkcs11 "$box" "$label" \
         "$([ "$want_nss" = 1 ] && printf nss || printf nonss)" "$lib"
 
-    [ "$want_nss" = 1 ] && nss_register "$box"
+    # --no-nss means "do not touch NSS", not "say nothing": the socket and the
+    # override are not an NSS matter, and a named app still gets them.
+    if [ "$want_nss" = 1 ]; then
+        nss_register "$box" "$fpapp"
+    elif [ -n "$fpapp" ]; then
+        nss_register_flatpak "$box" 0 "$fpapp"
+    fi
     pkcs11_verify_host "$name"
     pkcs11_version_warn "$boxver" "$box"
     info "restart Chromium/Brave/Chrome for them to pick up the module"
@@ -3807,6 +3868,7 @@ Desktop entry (GUI apps: browsers, editors, anything with a window)
 
 Publish a box resource to the host
   sora provide pkcs11 <library> --box <box> --label <label> [--no-nss]
+                                [--flatpak-app <id>]
                                    a PKCS#11 token driver that lives in a box,
                                    usable by the host's browsers. Writes a
                                    p11-kit module file and registers the host's
@@ -3816,6 +3878,11 @@ Publish a box resource to the host
                                    A Flatpak browser gets p11-kit-client.so
                                    instead, and the two commands it needs are
                                    printed, never run.
+                                   --flatpak-app names an app discovery cannot
+                                   see, because it loads the module by path and
+                                   has no NSS database. It gets those same two
+                                   commands, and a registration only if it does
+                                   turn out to have a database.
   sora provide native-messaging <host-name> --box <box> [--as <name>]
                                    [--browsers <list>] [--extension-id <id>]...
                                    a browser signing helper that lives in a

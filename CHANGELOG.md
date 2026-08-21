@@ -11,6 +11,33 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ### Added
 
+- `sora provide pkcs11` gained `--flatpak-app <id>`, for a Flatpak app that
+  discovery structurally cannot find.
+
+  NSS is one way an application finds a PKCS#11 module; loading a `.so` by path
+  is another, and only the first leaves a database behind to be discovered. A
+  Java application on `SunPKCS11` — PJeOffice Pro, the CNJ's signing app, is
+  the case this was built against — has no database anywhere, so it was skipped,
+  and the two commands it actually needs went with it, because they were printed
+  from inside the discovery loop.
+
+  Those two commands are not browser-specific: flatpak already writes a
+  `p11-kit-trust.module` pointing at `p11-kit-client.so` into every sandbox, and
+  swapping the socket makes that same module serve everything the host's p11-kit
+  knows, including a `remote:` module aimed into a box. So the hint half now
+  applies to a Flatpak app as such, and the NSS half stays with apps that have a
+  database. A named app gets a registration too, if it does turn out to have
+  one.
+
+  It works with `--no-nss`, which used to drop the hints along with the
+  registration: that flag means "do not touch NSS", and neither of those
+  commands is an NSS matter. Without a named app, `--no-nss` stays quiet as
+  before — naming an app is what asks the question.
+
+  The name is validated before anything is written. The user typed the ID, so a
+  typo is a mistake to report, not an app to skip in silence the way discovery
+  skips an uninstalled leftover.
+
 - `sora provide pkcs11` now reads p11-kit's version on both sides and warns
   when the host and the box disagree.
 

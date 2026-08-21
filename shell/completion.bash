@@ -36,6 +36,20 @@ _sora_registry_commands() { # anxious.list | delegate.list
     [ -r "$f" ] && cut -f1 -- "$f"
 }
 
+# Flatpak application IDs, read from ~/.var/app rather than from 'flatpak list'.
+# That directory is a readdir with no process behind it, and it is the same
+# place 'provide pkcs11' looks. An app installed but never run has no directory
+# yet and so is not offered; typing its ID still works, which is the right
+# trade for a Tab that must not fork.
+_sora_flatpak_apps() {
+    local d f
+    d="$HOME/.var/app"
+    [ -d "$d" ] || return 0
+    for f in "$d"/*; do
+        [ -d "$f" ] && printf '%s\n' "${f##*/}"
+    done
+}
+
 _sora() {
     local cur prev cmd sub i
     cur=${COMP_WORDS[COMP_CWORD]}
@@ -66,6 +80,9 @@ _sora() {
             return ;;
         --name|--comment|--generic-name|--icon|--keywords|--wmclass)
             return ;;   # free-form: whatever the user wants to read in the menu
+        --flatpak-app)
+            mapfile -t COMPREPLY < <(compgen -W "$(_sora_flatpak_apps)" -- "$cur")
+            return ;;
         --path|--as|--label|--browsers|--extension-id)
             # --path is a path INSIDE the box, so the host filesystem is the
             # wrong candidate list; offering nothing is deliberate, not a gap.
@@ -140,7 +157,7 @@ _sora() {
                 pkcs11)
                     case $cur in
                         -*) mapfile -t COMPREPLY < <(compgen -W \
-                                "--box --label --no-nss" -- "$cur") ;;
+                                "--box --label --no-nss --flatpak-app" -- "$cur") ;;
                         *)  ;;   # a library path INSIDE the box: nothing to offer
                     esac ;;
                 native-messaging)

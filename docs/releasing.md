@@ -10,8 +10,8 @@ bin/release 0.2.0
 git push origin main v0.2.0
 ```
 
-`bin/release` does everything local and reversible: bumps the version in
-`bin/sora`, `packaging/sora.spec` and `packaging/PKGBUILD`, rolls the
+`bin/release` does everything local and reversible: bumps `SORA_VERSION` in
+`bin/sora`, which is the only place a version lives, rolls the
 `## [Unreleased]` section of `CHANGELOG.md` into `## [0.2.0] - <date>`,
 runs the test suite, commits (`release: v0.2.0`) and tags. It never pushes.
 

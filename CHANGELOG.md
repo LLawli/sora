@@ -9,6 +9,60 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ## [Unreleased]
 
+### Added
+
+- `sora provide pkcs11` gained `--flatpak-app <id>`, for a Flatpak app that
+  discovery structurally cannot find.
+
+  NSS is one way an application finds a PKCS#11 module; loading a `.so` by path
+  is another, and only the first leaves a database behind to be discovered. A
+  Java application on `SunPKCS11` — PJeOffice Pro, the CNJ's signing app, is
+  the case this was built against — has no database anywhere, so it was skipped,
+  and the two commands it actually needs went with it, because they were printed
+  from inside the discovery loop.
+
+  Those two commands are not browser-specific: flatpak already writes a
+  `p11-kit-trust.module` pointing at `p11-kit-client.so` into every sandbox, and
+  swapping the socket makes that same module serve everything the host's p11-kit
+  knows, including a `remote:` module aimed into a box. So the hint half now
+  applies to a Flatpak app as such, and the NSS half stays with apps that have a
+  database. A named app gets a registration too, if it does turn out to have
+  one.
+
+  It works with `--no-nss`, which used to drop the hints along with the
+  registration: that flag means "do not touch NSS", and neither of those
+  commands is an NSS matter. Without a named app, `--no-nss` stays quiet as
+  before — naming an app is what asks the question.
+
+  The name is validated before anything is written. The user typed the ID, so a
+  typo is a mistake to report, not an app to skip in silence the way discovery
+  skips an uninstalled leftover.
+
+- `sora provide pkcs11` now reads p11-kit's version on both sides and warns
+  when the host and the box disagree.
+
+  `p11-kit remote` forwards the PKCS#11 function table over a pipe, and the two
+  ends have to agree. When they do not, nothing refuses at connect time: the
+  slots enumerate, the PIN is accepted, `C_FindObjects` returns the keys, and
+  only `C_SignInit` fails, with `CKR_DEVICE_ERROR`. Measured with a Fedora host
+  at 0.26.4, a Debian trixie box at 0.25.5 logs in and cannot sign, while a
+  Fedora 44 box at 0.26.2 signs. That first pair is the combination
+  `sora-adv-br` builds by default, and it fails in the way that costs the most,
+  because everything looks right up to the signature.
+
+  The warning is advisory and never fatal: the module is still useful for
+  authentication, which is the other half of what `provide` is for. It also
+  does not name a bad version — which change between those releases does it was
+  never bisected, so it reports that the two ends differ, which is what was
+  established and what the reader can act on.
+
+  p11-kit has no `--version` flag and no version string inside its binary, so
+  the version comes from whoever installed it (`rpm`, `dpkg-query`, `pacman`,
+  `apk`, then `pkg-config`), normalised to the upstream part. The soname is
+  deliberately not used: Debian's 0.25.5 ships `libp11-kit.so.0.4.1` and
+  Fedora's 0.26.4 ships `libp11-kit.so.0.4.10`, which agree on major.minor and
+  differ in a number that means nothing to the person reading the warning.
+
 ## [0.4.0] - 2026-08-15
 
 ### Added

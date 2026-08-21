@@ -21,6 +21,19 @@ _sora_indexed() {
     (( $#c )) && _describe -t commands 'indexed command' c
 }
 
+# Flatpak application IDs, read from ~/.var/app rather than from 'flatpak list'.
+# That directory is a glob with no process behind it, and it is the same place
+# 'provide pkcs11' looks. An app installed but never run has no directory yet
+# and so is not offered; typing its ID still works, which is the right trade
+# for a Tab that must not fork.
+_sora_flatpak_apps() {
+    local d=$HOME/.var/app
+    local -a a
+    [[ -d $d ]] || return 0
+    a=(${d}/*(N/:t))
+    (( $#a )) && _describe -t flatpak 'flatpak app' a
+}
+
 _sora_registry() {  # anxious.list | delegate.list
     local f=${XDG_CONFIG_HOME:-$HOME/.config}/sora/$1
     local -a c
@@ -118,6 +131,7 @@ _sora() {
                                 '--box[which box has the driver]:box:_sora_boxes' \
                                 '--label[short handle for this module]:label:' \
                                 '--no-nss[skip the ~/.pki/nssdb registration]' \
+                                '--flatpak-app[also address this Flatpak app, which has no NSS database]:app:_sora_flatpak_apps' \
                                 '*:library inside the box:' ;;
                             native-messaging) _arguments \
                                 '--box[which box has the helper]:box:_sora_boxes' \

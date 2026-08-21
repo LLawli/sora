@@ -18,6 +18,9 @@ printf 'htop\tbeta\tnosudo\t/x/htop\t/usr/bin/htop\n' > "$XDG_CONFIG_HOME/sora/a
 printf 'apt-cache\talpha\n' > "$XDG_CONFIG_HOME/sora/delegate.list"
 printf 'sora-alpha-tok\tpkcs11\talpha\ttok\tnss\t/usr/lib/libtok.so\n' \
     > "$XDG_CONFIG_HOME/sora/provide.list"
+# --flatpak-app's candidates come from ~/.var/app, a readdir with no process
+# behind it - not from 'flatpak list', which would fork on every Tab.
+mkdir -p "$HOME/.var/app/br.jus.cnj.PJeOffice" "$HOME/.var/app/com.brave.Browser"
 
 # A stub that fails loudly: if completing ever shells out to a container
 # manager, these turn the test red instead of silently costing seconds.
@@ -119,8 +122,12 @@ assert_contains "$out" "native-messaging" "'sora provide' lists the native-messa
 assert_contains "$out" "remove" "'sora provide' lists remove"
 out=$(complete_bash sora provide pkcs11 -)
 assert_contains "$out" "--no-nss" "'provide pkcs11' offers its flags"
+assert_contains "$out" "--flatpak-app" "'provide pkcs11' offers --flatpak-app"
 out=$(complete_bash sora provide pkcs11 --box "")
 assert_contains "$out" "alpha" "'provide pkcs11 --box' offers box names"
+out=$(complete_bash sora provide pkcs11 --flatpak-app "")
+assert_contains "$out" "br.jus.cnj.PJeOffice" "--flatpak-app offers installed app IDs"
+assert_not_contains "$out" "htop" "--flatpak-app does not fall back to command names"
 out=$(complete_bash sora provide remove "")
 assert_contains "$out" "sora-alpha-tok" "'provide remove' offers provisioned names"
 assert_not_contains "$out" "htop" "'provide remove' offers only provisions"
@@ -143,7 +150,8 @@ assert_contains "$out" "fish" "'hook install' offers shell names"
 
 # --- the whole point: no container is ever touched --------------------------
 for words in "sora " "sora box enter " "sora which apt-" "sora anxious --box " \
-             "sora provide " "sora provide remove " "sora provide pkcs11 --box "; do
+             "sora provide " "sora provide remove " "sora provide pkcs11 --box " \
+             "sora provide pkcs11 --flatpak-app "; do
     # shellcheck disable=SC2086
     out=$(complete_bash $words "")
     assert_not_contains "$out" "CONTAINER TOUCHED" "completing '$words' touches no container"
@@ -226,6 +234,11 @@ if command -v fish >/dev/null 2>&1; then
     assert_not_contains "$out" "CHANGELOG" "fish: provide --box must not fall back to filenames"
     out=$(fish_complete 'sora provide pkcs11 --label ')
     assert_not_contains "$out" "CHANGELOG" "fish: --label must not fall back to filenames"
+    out=$(fish_complete 'sora provide pkcs11 --flatpak-app ')
+    assert_contains "$out" "br.jus.cnj.PJeOffice" "fish: --flatpak-app offers installed app IDs"
+    assert_not_contains "$out" "CHANGELOG" "fish: --flatpak-app must not fall back to filenames"
+    out=$(fish_complete 'sora provide pkcs11 --flat')
+    assert_contains "$out" "--flatpak-app" "fish: --flatpak-app is offered"
     out=$(fish_complete 'sora provide remove ')
     assert_contains "$out" "sora-gamma-tok" "fish: provide remove offers provisioned names"
     out=$(fish_complete 'sora provide ')

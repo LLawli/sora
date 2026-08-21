@@ -320,6 +320,29 @@ registro é singleton: é escrito uma vez só, não importa quantos módulos voc
 publique, e é removido quando o último sai. O sora não mexe em proxy do p11-kit
 que ele não registrou.
 
+**App Flatpak que não é navegador precisa do `--flatpak-app`.** O NSS é um jeito
+de uma aplicação achar um módulo PKCS#11; carregar um `.so` por caminho é outro,
+e só o primeiro deixa um banco para o sora descobrir. Uma aplicação Java em
+`SunPKCS11` (o PJeOffice Pro, o assinador do CNJ, é o caso para o qual isso foi
+feito) não tem banco nenhum, então a descoberta estruturalmente não a enxerga.
+Só que o socket e o override são exatamente o que ela precisa: o flatpak já
+escreve um `p11-kit-trust.module` apontando para o `p11-kit-client.so` em todo
+sandbox, e trocar o socket faz esse mesmo módulo servir tudo que o p11-kit do
+host conhece, inclusive um módulo `remote:` apontado para dentro de uma box. O
+`--flatpak-app <id>` nomeia o que a descoberta não acha; o app recebe os dois
+comandos, e um registro só se ele acabar tendo um banco. Funciona junto com
+`--no-nss` também: essa flag quer dizer "não mexa no NSS", e nenhum dos dois
+comandos é assunto de NSS.
+
+**As duas pontas do cano precisam rodar o mesmo p11-kit.** O remoting encaminha
+a tabela de funções PKCS#11, e quando as versões discordam nada recusa na hora
+de conectar: os slots aparecem, o PIN é aceito, as chaves são encontradas, e só
+a assinatura falha, com `CKR_DEVICE_ERROR`. Host Fedora em 0.26.4 com box
+Debian trixie em 0.25.5 autentica e não assina; o mesmo host com box Fedora 44
+em 0.26.2 assina. Então o sora lê a versão dos dois lados na hora de publicar e
+avisa — o módulo continua servindo para autenticação, e igualar as versões é a
+correção.
+
 O segundo adaptador cobre a outra metade do problema do token:
 
 ```console

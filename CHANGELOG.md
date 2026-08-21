@@ -9,6 +9,8 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-21
+
 ### Added
 
 - `sora provide pkcs11` gained `--flatpak-app <id>`, for a Flatpak app that

@@ -157,7 +157,7 @@ _sora() {
                 pkcs11)
                     case $cur in
                         -*) mapfile -t COMPREPLY < <(compgen -W \
-                                "--box --label --no-nss --flatpak-app" -- "$cur") ;;
+                                "--box --label --no-nss --flatpak-app --allow-version-mismatch" -- "$cur") ;;
                         *)  ;;   # a library path INSIDE the box: nothing to offer
                     esac ;;
                 native-messaging)

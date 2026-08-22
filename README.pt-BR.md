@@ -334,14 +334,23 @@ comandos, e um registro só se ele acabar tendo um banco. Funciona junto com
 `--no-nss` também: essa flag quer dizer "não mexa no NSS", e nenhum dos dois
 comandos é assunto de NSS.
 
-**As duas pontas do cano precisam rodar o mesmo p11-kit.** O remoting encaminha
-a tabela de funções PKCS#11, e quando as versões discordam nada recusa na hora
-de conectar: os slots aparecem, o PIN é aceito, as chaves são encontradas, e só
-a assinatura falha, com `CKR_DEVICE_ERROR`. Host Fedora em 0.26.4 com box
-Debian trixie em 0.25.5 autentica e não assina; o mesmo host com box Fedora 44
-em 0.26.2 assina. Então o sora lê a versão dos dois lados na hora de publicar e
-avisa — o módulo continua servindo para autenticação, e igualar as versões é a
-correção.
+**As duas pontas do cano precisam rodar a mesma série do p11-kit.** O remoting
+encaminha a tabela de funções PKCS#11, e quando as versões discordam nada recusa
+na hora de conectar: os slots aparecem, o PIN é aceito, as chaves são
+encontradas, e aí tudo que toca a chave privada falha. Todo mecanismo: RSA e
+suas variantes PSS, ECDSA, todos. Autenticação por certificado também assina, no
+`CertificateVerify` do TLS, então um par divergente leva o login junto: o
+certificado continua aparecendo na lista do navegador, o PIN continua sendo
+aceito, e morre no último passo. Host Fedora em 0.26.4 com box Debian trixie em
+0.25.5 falha o handshake com certificado de cliente tanto em TLS 1.2 quanto em
+TLS 1.3; o mesmo host com box Fedora 44 em 0.26.2 funciona.
+
+Então o sora lê a versão dos dois lados e **recusa publicar** quando as séries
+divergem, porque um módulo que não consegue usar a chave é pior que módulo
+nenhum: a falha aparece depois e em outro lugar. O `--allow-version-mismatch`
+publica assim mesmo. E o `sora doctor` roda a mesma checagem no que já está
+publicado, que é como o outro sentido é pego: o host atualiza o p11-kit, a box
+não, e nada mais perceberia.
 
 O segundo adaptador cobre a outra metade do problema do token:
 

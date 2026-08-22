@@ -329,14 +329,23 @@ only if it does turn out to have a database. It works with `--no-nss` too:
 that flag means "do not touch NSS", and neither of those commands is an NSS
 matter.
 
-**Both ends of the pipe have to run the same p11-kit.** Remoting forwards the
-PKCS#11 function table, and when the versions disagree nothing refuses at
-connect time: the slots enumerate, the PIN is accepted, the keys are found, and
-only the signature fails, with `CKR_DEVICE_ERROR`. A Fedora host at 0.26.4 with
-a Debian trixie box at 0.25.5 authenticates and cannot sign; the same host with
-a Fedora 44 box at 0.26.2 signs. So sora reads the version on both sides while
-publishing and says so — the module is still good for authentication, and
-matching the versions is the fix.
+**Both ends of the pipe have to run the same p11-kit series.** Remoting forwards
+the PKCS#11 function table, and when the versions disagree nothing refuses at
+connect time: the slots enumerate, the PIN is accepted, the keys are found — and
+then everything that touches the private key fails. Every mechanism: RSA and its
+PSS variants, ECDSA, all of them. Certificate authentication signs too, in the
+TLS `CertificateVerify`, so a mismatched pair takes the login with it — the
+certificate still appears in the browser's list, the PIN is still accepted, and
+it dies at the last step. A Fedora host at 0.26.4 with a Debian trixie box at
+0.25.5 fails both TLS 1.2 and TLS 1.3 client-certificate handshakes; the same
+host with a Fedora 44 box at 0.26.2 works.
+
+So sora reads the version on both sides and **refuses to publish** across a
+series mismatch, because a module that cannot use the key is worse than no
+module: the failure surfaces later and somewhere else. `--allow-version-mismatch`
+publishes anyway. `sora doctor` runs the same check on what is already
+published, which is how the other direction gets caught — the host upgrades
+p11-kit, the box does not, and nothing else would notice.
 
 The second adapter covers the other half of the smartcard problem:
 

@@ -132,6 +132,7 @@ _sora() {
                                 '--label[short handle for this module]:label:' \
                                 '--no-nss[skip the ~/.pki/nssdb registration]' \
                                 '--flatpak-app[also address this Flatpak app, which has no NSS database]:app:_sora_flatpak_apps' \
+                                '--allow-version-mismatch[publish even though host and box p11-kit series differ]' \
                                 '*:library inside the box:' ;;
                             native-messaging) _arguments \
                                 '--box[which box has the helper]:box:_sora_boxes' \

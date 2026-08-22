@@ -22,9 +22,16 @@ mkdir -p "$BOXBIN" "$SORA_SYSROOT/usr/lib64"
 : > "$SORA_SYSROOT/usr/lib64/p11-kit-proxy.so"
 PROXY="$SORA_SYSROOT/usr/lib64/p11-kit-proxy.so"
 
-cat > "$STUB_BIN/podman" <<'EOF'
+# Whether the box counts as RUNNING is a file, so a test can stop it without
+# stopping anything. It starts stopped, which is what every case before the
+# drift block assumes: doctor must not enter a box to read its p11-kit version.
+RUNSTATE="$SANDBOX/running"
+printf 'false\n' > "$RUNSTATE"
+cat > "$STUB_BIN/podman" <<EOF
 #!/bin/sh
-[ "$1" = container ] && [ "$2" = exists ] && exit 0
+[ "\$1" = container ] && [ "\$2" = exists ] && exit 0
+# container_running() asks 'container inspect --format {{.State.Running}}'.
+[ "\$1" = container ] && [ "\$2" = inspect ] && { cat "$RUNSTATE"; exit 0; }
 exit 1
 EOF
 
@@ -544,9 +551,11 @@ rm -rf "$HOME/.var"
 # --- host/box p11-kit version mismatch ---------------------------------------
 # 'p11-kit remote' forwards the PKCS#11 function table over a pipe and the two
 # ends have to agree. When they do not, nothing refuses at connect time: the
-# slots enumerate, the PIN is accepted, the keys are found, and only C_SignInit
-# fails with CKR_DEVICE_ERROR. So the check has to run at publish time - by
-# signature time nobody is looking at p11-kit any more.
+# slots enumerate, the PIN is accepted, the keys are found - and then every
+# operation that touches the private key fails. Not signing alone: certificate
+# authentication signs too, in the TLS CertificateVerify, so a mismatched pair
+# dies at the last step of a login. A module that cannot use the key is worse
+# than no module, because the failure surfaces later and somewhere else.
 rm -rf "$NSSDB" "$MODULES"
 : > "$FLATPAK_APPS"
 # The host answers through rpm, the box through dpkg-query, which is the real
@@ -561,34 +570,78 @@ box_p11_version() { # version
 }
 
 box_p11_version '0.25.5-3'
-out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label ver1 2>&1) ||
-    fail "a version mismatch must not fail the provision: $out"
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label ver1 2>&1) &&
+    fail "a series mismatch must refuse to publish"
 assert_contains "$out" "host p11-kit 0.26.4, box 'advbr' p11-kit 0.25.5" \
-    "the warning names both versions and the box"
-assert_contains "$out" "CKR_DEVICE_ERROR" "the warning names the error that will be seen"
-[ -f "$MODULES/sora-advbr-ver1.module" ] ||
-    fail "the warning is advisory; the module file must still be written"
+    "the refusal names both versions and the box"
+assert_contains "$out" "certificate authentication" \
+    "the message says authentication fails too, not signing alone"
+# The line this replaced said "authentication should work", which was wrong in
+# the most expensive way available: it sent people to a court portal to find
+# out. It must never come back.
+assert_not_contains "$out" "authentication should work" \
+    "the old, false reassurance must not return"
+assert_contains "$out" "0.26 series" "the fix names the series to install"
+assert_not_contains "$out" "trixie" "the fix must not name a distribution suite"
+[ -f "$MODULES/sora-advbr-ver1.module" ] && fail "a refused provision wrote a module file"
+grep -q 'sora-advbr-ver1' "$REG" 2>/dev/null && fail "a refused provision wrote a registry row"
+
+# The escape hatch: same pair, published on purpose. The warning still prints -
+# overriding a refusal does not make the pair work.
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label ver1 \
+    --allow-version-mismatch 2>&1) || fail "--allow-version-mismatch must publish: $out"
+assert_contains "$out" "certificate authentication" "the override still explains itself"
+[ -f "$MODULES/sora-advbr-ver1.module" ] || fail "--allow-version-mismatch wrote no module file"
 "$SORA_BIN" provide remove sora-advbr-ver1 >/dev/null 2>&1
 
-# 0.26.4 host with a 0.26.2 box is a pair that signs, so the comparison is on
+# 0.26.4 host with a 0.26.2 box is a pair that works, so the comparison is on
 # the series and a patch-level difference says nothing.
 box_p11_version '0.26.2-1'
-out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label ver2 2>&1) || fail "$out"
-assert_not_contains "$out" "CKR_DEVICE_ERROR" "a patch-level difference is not a mismatch"
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label ver2 2>&1) ||
+    fail "a patch-level difference must not refuse: $out"
+assert_not_contains "$out" "certificate authentication" \
+    "a patch-level difference is not a mismatch"
 "$SORA_BIN" provide remove sora-advbr-ver2 >/dev/null 2>&1
 
 box_p11_version '1:0.26.4-3'
 out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label ver3 2>&1) || fail "$out"
-assert_not_contains "$out" "CKR_DEVICE_ERROR" \
+assert_not_contains "$out" "certificate authentication" \
     "an epoch belongs to the packaging, not to p11-kit"
 "$SORA_BIN" provide remove sora-advbr-ver3 >/dev/null 2>&1
 
-# A box whose package manager cannot answer says nothing at all: a warning
-# nobody can act on is noise.
+# A box whose package manager cannot answer is published without comment:
+# there is no refusing on ignorance, and a warning nobody can act on is noise.
 rm -f "$BOXBIN/dpkg-query"
-out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label ver4 2>&1) || fail "$out"
-assert_not_contains "$out" "CKR_DEVICE_ERROR" "an unknown version is silent"
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label ver4 2>&1) ||
+    fail "an unknown version must not refuse: $out"
+assert_not_contains "$out" "certificate authentication" "an unknown version is silent"
 "$SORA_BIN" provide remove sora-advbr-ver4 >/dev/null 2>&1
-rm -f "$STUB_BIN/rpm"
+
+# --- doctor catches the drift, and never wakes a box to do it ----------------
+# A pair that was fine at publish time comes apart when the host upgrades
+# p11-kit and the box does not. Nothing re-checks that, so doctor does.
+box_p11_version '0.26.2-1'
+out=$("$SORA_BIN" provide pkcs11 "$LIB" --box advbr --label drift 2>&1) || fail "$out"
+box_p11_version '0.25.5-3'          # the box stood still; the host moved on
+
+# The container is not running, so doctor must not enter it: waking one costs
+# seconds on the command people run when things are ALREADY broken.
+printf 'false\n' > "$RUNSTATE"
+out=$("$SORA_BIN" doctor 2>&1 || true)
+assert_not_contains "$out" "certificate authentication" \
+    "a stopped box is not woken, and not reported on a version nobody read"
+
+printf 'true\n' > "$RUNSTATE"
+out=$("$SORA_BIN" doctor 2>&1 || true)
+assert_contains "$out" "FAIL host p11-kit 0.26.4, box 'advbr' p11-kit 0.25.5" \
+    "doctor reports a provision that drifted out of series"
+# doctor counts what it marks FAIL, so one broken pair told in three lines must
+# not be tallied as three problems.
+assert_not_contains "$out" "FAIL across this pair" \
+    "the detail lines continue the headline; they are not separate problems"
+assert_contains "$out" "certificate authentication" "the detail is still printed"
+"$SORA_BIN" provide remove sora-advbr-drift >/dev/null 2>&1
+printf 'false\n' > "$RUNSTATE"
+rm -f "$STUB_BIN/rpm" "$BOXBIN/dpkg-query"
 
 echo "ok: provide pkcs11"

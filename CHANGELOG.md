@@ -9,6 +9,47 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `sora provide pkcs11` now **refuses** to publish when the host
+  and the box run different p11-kit series, where 0.5.0 only warned.
+  `--allow-version-mismatch` publishes anyway.
+
+  The 0.5.0 warning understated the damage. It said "authentication should
+  work; signing may fail", and measurement says nothing that touches the
+  private key works. Host 0.26.4 against box 0.25.5: `CKM_RSA_PKCS` and
+  `CKM_SHA256_RSA_PKCS` give `CKR_DEVICE_ERROR`, both PSS mechanisms give
+  `CKR_OBJECT_HANDLE_INVALID`, `CKM_ECDSA` gives `CKR_DEVICE_ERROR`. No
+  mechanism survives, and a real client-certificate handshake fails on both TLS
+  1.2 and TLS 1.3, in `tls_construct_cert_verify`.
+
+  Certificate authentication signs too, in the TLS `CertificateVerify` — so the
+  old message was wrong exactly where it reassured, and sent people to find out
+  mid-login, in a court portal. A module that cannot use the key is worse than
+  no module, because the failure surfaces later and somewhere else, which is why
+  this is now a refusal rather than a warning.
+
+  The check also moved ahead of every write, so a refusal leaves nothing behind.
+  Neither side being determinable still publishes in silence: there is no
+  refusing on ignorance.
+
+  The message names the series to install and deliberately does not name a
+  distribution suite. Which suite carries which series changes with every
+  release, and telling someone already on the newer suite to install from it
+  would be worse than saying nothing.
+
+### Added
+
+- `sora doctor` now runs the same p11-kit series check against every published
+  pkcs11 provision, which catches the drift case: the host upgrades p11-kit, the
+  box does not, and nothing else would notice.
+
+  It never wakes a box to do it. Entering a stopped container costs seconds and
+  starts something nobody asked to start, on the one command people run when
+  things are already broken — so a stopped box goes unchecked and says nothing,
+  rather than crying wolf about a version it did not read. Each box is asked
+  once, however many provisions share it.
+
 ## [0.5.0] - 2026-08-21
 
 ### Added

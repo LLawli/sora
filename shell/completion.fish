@@ -161,6 +161,8 @@ complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcom
 # the app ID falls through to the generic rule, which offers filenames.
 complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from pkcs11' \
     -l flatpak-app -x -a '(__sora_flatpak_apps)' -d 'Also address this Flatpak app'
+complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from pkcs11' \
+    -l allow-version-mismatch -d 'Publish despite differing p11-kit series'
 complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from native-messaging' \
     -l box -x -a '(__sora_boxes)' -d 'Which box has the helper'
 complete -c sora -n '__fish_seen_subcommand_from provide; and __fish_seen_subcommand_from native-messaging' \

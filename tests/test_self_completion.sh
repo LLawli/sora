@@ -123,6 +123,7 @@ assert_contains "$out" "remove" "'sora provide' lists remove"
 out=$(complete_bash sora provide pkcs11 -)
 assert_contains "$out" "--no-nss" "'provide pkcs11' offers its flags"
 assert_contains "$out" "--flatpak-app" "'provide pkcs11' offers --flatpak-app"
+assert_contains "$out" "--allow-version-mismatch" "'provide pkcs11' offers --allow-version-mismatch"
 out=$(complete_bash sora provide pkcs11 --box "")
 assert_contains "$out" "alpha" "'provide pkcs11 --box' offers box names"
 out=$(complete_bash sora provide pkcs11 --flatpak-app "")
@@ -239,6 +240,8 @@ if command -v fish >/dev/null 2>&1; then
     assert_not_contains "$out" "CHANGELOG" "fish: --flatpak-app must not fall back to filenames"
     out=$(fish_complete 'sora provide pkcs11 --flat')
     assert_contains "$out" "--flatpak-app" "fish: --flatpak-app is offered"
+    out=$(fish_complete 'sora provide pkcs11 --allow')
+    assert_contains "$out" "--allow-version-mismatch" "fish: --allow-version-mismatch is offered"
     out=$(fish_complete 'sora provide remove ')
     assert_contains "$out" "sora-gamma-tok" "fish: provide remove offers provisioned names"
     out=$(fish_complete 'sora provide ')

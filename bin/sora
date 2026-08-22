@@ -2234,30 +2234,86 @@ pkcs11_verify_host() { # name
 
 # 'p11-kit remote' forwards the PKCS#11 function table over a pipe, and the two
 # ends have to agree. When they do not, nothing refuses at connect time: the
-# slots enumerate, the PIN is accepted, C_FindObjects returns the keys, and
-# only C_SignInit fails, with CKR_DEVICE_ERROR. Measured with a Fedora host at
-# 0.26.4: a Debian trixie box at 0.25.5 logs in and cannot sign; a Fedora 44
-# box at 0.26.2 signs. That is the combination sora-adv-br builds by default,
-# and it fails in the way that costs the most, because everything looks right.
+# slots enumerate, the PIN is accepted, C_FindObjects returns the keys — and
+# then EVERY operation that touches the private key fails. Measured host 0.26.4
+# against box 0.25.5: CKM_RSA_PKCS and CKM_SHA256_RSA_PKCS give
+# CKR_DEVICE_ERROR, the PSS mechanisms give CKR_OBJECT_HANDLE_INVALID, CKM_ECDSA
+# gives CKR_DEVICE_ERROR. No mechanism survives, and a real client-certificate
+# handshake fails on both TLS 1.2 and TLS 1.3, in tls_construct_cert_verify.
 #
-# Which change between those releases does it was never bisected, so this does
-# not name a bad version. It reports that the two ends differ, which is the
-# only thing established and also the only thing the reader can act on.
+# So this is not a signing extra. Certificate authentication signs too, in the
+# TLS CertificateVerify, which is why an earlier version of this warning saying
+# "authentication should work" was wrong in the most expensive way available:
+# the certificate still lists, the PIN is still accepted, and the login dies at
+# the last step, inside a court portal.
 #
-# Advisory, never fatal: the module is still useful for authentication, which
-# is the other half of what 'provide' is for. Silence when either side is
-# unknown — a warning nobody can act on is noise.
+# Upstream the cause is p11-kit 0.26.0 ("pkcs11: Update PKCS11 headers to
+# version 3.2"), and it is not a one-off - 0.25.8 was "rpc: Unbreak protocol
+# compatibility". The series is therefore the unit of comparison, not the patch
+# level: 0.26.4 against 0.26.2 is a working pair.
+#
+# Fatal by default because a module that cannot use the key is worse than no
+# module: it is discovered later and somewhere else. --allow-version-mismatch
+# is the escape hatch, in the same spirit as the refusal to shadow a host
+# binary. Silence when either side is unknown - there is no refusing on
+# ignorance.
 pkcs11_series() { printf '%s' "$1" | cut -d. -f1,2; }
 
-pkcs11_version_warn() { # box-version box
-    local hostver
+pkcs11_host_version() {
+    local v
+    [ -x "$SORA_DATA/libexec/sora-pkcs11" ] || { printf 'unknown\n'; return 0; }
+    v=$("$SORA_DATA/libexec/sora-pkcs11" version 2>/dev/null) || v=unknown
+    printf '%s\n' "${v:-unknown}"
+}
+
+# 0 when the two ends agree, or when either side could not be determined.
+pkcs11_version_agree() { # host-version box-version
     case ${1:-} in ''|unknown) return 0 ;; esac
-    hostver=$("$SORA_DATA/libexec/sora-pkcs11" version 2>/dev/null) || hostver=unknown
-    case $hostver in ''|unknown) return 0 ;; esac
-    [ "$(pkcs11_series "$hostver")" = "$(pkcs11_series "$1")" ] && return 0
-    warn "host p11-kit $hostver, box '$2' p11-kit $1"
-    warn "authentication should work; signing may fail with CKR_DEVICE_ERROR"
-    warn "matching the versions on both sides is the fix"
+    case ${2:-} in ''|unknown) return 0 ;; esac
+    [ "$(pkcs11_series "$1")" = "$(pkcs11_series "$2")" ]
+}
+
+# The wording is the same whether 'provide' or 'doctor' is saying it, so it
+# lives once and the caller passes the printers.
+#
+# Two of them, because this is ONE problem told in three lines. doctor counts
+# what it prints, so passing 'bad' three times would report a single broken
+# pair as three problems; the detail lines go to a printer that says the same
+# thing without counting it again.
+#
+# The fix is named without naming a distribution suite. Which suite carries
+# which series changes with every release, and a sora that told someone already
+# on the newer suite to install from it would be worse than saying nothing.
+pkcs11_version_lines() { # host-version box-version box headline detail
+    "$4" "host p11-kit $1, box '$3' p11-kit $2"
+    "$5" "across this pair the private key is unusable: signing AND certificate authentication both fail, for every mechanism (RSA, PSS, ECDSA)"
+    "$5" "install a p11-kit of the host's $(pkcs11_series "$1") series inside box '$3'; the box's own repository may carry only $(pkcs11_series "$2")"
+}
+
+# The same check as 'doctor' needs it, which differs from 'provide' twice.
+#
+# It never wakes a box. Entering a stopped container costs seconds and starts
+# something nobody asked to start, on the one command people run when things
+# are already broken - so a stopped box goes unchecked rather than woken, and
+# says nothing rather than crying wolf about a version it did not read.
+#
+# And it asks each box once: several provisions commonly share a box, and the
+# answer is a property of the box, not of the provision.
+#
+# This is the drift case. A pair that was fine at publish time comes apart when
+# the host upgrades p11-kit and the box does not, and nothing re-checks it.
+PKCS11_CHECKED_BOXES=''
+pkcs11_doctor_versions() { # box headline detail
+    local hostver boxver
+    case "$PKCS11_CHECKED_BOXES" in *"$TAB$1$TAB"*) return 0 ;; esac
+    PKCS11_CHECKED_BOXES="$PKCS11_CHECKED_BOXES$TAB$1$TAB"
+    container_running "$1" || return 0
+    [ -x "$SORA_DATA/libexec/sora-pkcs11" ] || return 0
+    boxver=$(distrobox enter --name "$1" -- \
+        "$SORA_DATA/libexec/sora-pkcs11" version 2>/dev/null | tail -n1) || boxver=''
+    hostver=$(pkcs11_host_version)
+    pkcs11_version_agree "$hostver" "$boxver" && return 0
+    pkcs11_version_lines "$hostver" "$boxver" "$1" "$2" "$3"
     return 0
 }
 
@@ -2956,13 +3012,15 @@ EOF
 }
 
 cmd_provide_pkcs11() {
-    local lib='' box='' label='' want_nss=1 fpapp='' name file pm probe boxver row exbox exlabel
+    local lib='' box='' label='' want_nss=1 fpapp='' allow_mismatch=0
+    local name file pm probe boxver hostver row exbox exlabel
     while [ $# -gt 0 ]; do
         case $1 in
             --box|-b) box=${2:?--box needs a value}; shift ;;
             --label)  label=${2:?--label needs a value}; shift ;;
             --no-nss) want_nss=0 ;;
             --flatpak-app) fpapp=${2:?--flatpak-app needs a value}; shift ;;
+            --allow-version-mismatch) allow_mismatch=1 ;;
             -*)       die "unknown option for 'provide pkcs11': $1" ;;
             *)        [ -z "$lib" ] && lib=$1 || die "unexpected argument: $1" ;;
         esac
@@ -3039,6 +3097,18 @@ cmd_provide_pkcs11() {
         *) die "could not probe box '$box' for p11-kit" ;;
     esac
 
+    # A precondition, not an afterthought: across a series mismatch the key is
+    # unusable, so the module would be published, look right, and fail inside
+    # whatever the user logs into next. It is checked here, before anything is
+    # written, so a refusal leaves nothing behind.
+    hostver=$(pkcs11_host_version)
+    if ! pkcs11_version_agree "$hostver" "$boxver"; then
+        pkcs11_version_lines "$hostver" "$boxver" "$box" warn warn
+        [ "$allow_mismatch" = 1 ] ||
+            die "refusing to publish a module whose key cannot be used; --allow-version-mismatch overrides this"
+        warn "publishing anyway: --allow-version-mismatch was given"
+    fi
+
     # Nothing is written before every precondition passes.
     mkdir -p "$PKCS11_MODULES_DIR"
     file=$(pkcs11_module_file "$name")
@@ -3058,7 +3128,6 @@ cmd_provide_pkcs11() {
         nss_register_flatpak "$box" 0 "$fpapp"
     fi
     pkcs11_verify_host "$name"
-    pkcs11_version_warn "$boxver" "$box"
     info "restart Chromium/Brave/Chrome for them to pick up the module"
     return 0
 }
@@ -3612,6 +3681,9 @@ cmd_doctor() {
     local problems=0 meta name shell
     ok()  { printf '  ok   %s\n' "$*"; }
     bad() { printf '  FAIL %s\n' "$*"; problems=$((problems + 1)); }
+    # A continuation of the line above: same indent, no second tally mark. One
+    # problem explained in three lines is still one problem.
+    note() { printf '       %s\n' "$*"; }
 
     printf 'sora doctor:\n'
     command -v distrobox >/dev/null 2>&1 && ok "distrobox found" || bad "distrobox not found"
@@ -3732,6 +3804,10 @@ cmd_doctor() {
                     dbx=$(sed -n 's/^remote: |\([^ ]*\) .*/\1/p' "$pfile")
                     [ -n "$dbx" ] && [ ! -x "$dbx" ] &&
                         bad "provision '$pname' points at a missing distrobox ($dbx); re-run: sora provide pkcs11 $ptarget --box $pbox --label $plabel"
+                    # Drift: a provision that was fine when published becomes
+                    # unusable when the host upgrades p11-kit and the box does
+                    # not. Nothing re-checks that, so 'doctor' does.
+                    pkcs11_doctor_versions "$pbox" bad note
                     ;;
                 native-messaging)
                     if [ ! -x "$EXPORT_PATH/$pdetail" ]; then
@@ -3868,7 +3944,7 @@ Desktop entry (GUI apps: browsers, editors, anything with a window)
 
 Publish a box resource to the host
   sora provide pkcs11 <library> --box <box> --label <label> [--no-nss]
-                                [--flatpak-app <id>]
+                                [--flatpak-app <id>] [--allow-version-mismatch]
                                    a PKCS#11 token driver that lives in a box,
                                    usable by the host's browsers. Writes a
                                    p11-kit module file and registers the host's
@@ -3883,6 +3959,11 @@ Publish a box resource to the host
                                    has no NSS database. It gets those same two
                                    commands, and a registration only if it does
                                    turn out to have a database.
+                                   Publishing is refused when the host and the
+                                   box run different p11-kit series: across that
+                                   pair the private key is unusable, for signing
+                                   and for certificate authentication alike.
+                                   --allow-version-mismatch publishes anyway.
   sora provide native-messaging <host-name> --box <box> [--as <name>]
                                    [--browsers <list>] [--extension-id <id>]...
                                    a browser signing helper that lives in a

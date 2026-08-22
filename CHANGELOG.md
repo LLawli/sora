@@ -9,6 +9,8 @@ GitHub Release body — keep the `## [x.y.z]` heading format intact.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-22
+
 ### Changed
 
 - **Breaking:** `sora provide pkcs11` now **refuses** to publish when the host
